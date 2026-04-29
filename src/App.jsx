@@ -12,7 +12,8 @@ function useEmployees() {
     if (data) setEmps(data.map(e => ({
       id: e.id, name: e.name, role: e.role, pin: e.pin,
       startDate: e.start_date, pickHistory: e.pick_history || [],
-      docChecks: e.doc_checks || {}, notes: e.notes || "", privateNotes: e.private_notes || ""
+      docChecks: e.doc_checks || {}, notes: e.notes || "", privateNotes: e.private_notes || "",
+      trackPickRate: e.track_pick_rate !== false
     })));
     setLoaded(true);
   }, []);
@@ -23,7 +24,8 @@ function useEmployees() {
     await supabase.from("employees").upsert({
       id: emp.id, name: emp.name, role: emp.role, pin: emp.pin,
       start_date: emp.startDate, pick_history: emp.pickHistory,
-      doc_checks: emp.docChecks, notes: emp.notes, private_notes: emp.privateNotes
+      doc_checks: emp.docChecks, notes: emp.notes, private_notes: emp.privateNotes,
+      track_pick_rate: emp.trackPickRate !== false
     });
     await fetchEmps();
   }, [fetchEmps]);
@@ -43,7 +45,8 @@ function useEmployees() {
         supabase.from("employees").upsert({
           id: emp.id, name: emp.name, role: emp.role, pin: emp.pin,
           start_date: emp.startDate, pick_history: emp.pickHistory,
-          doc_checks: emp.docChecks, notes: emp.notes, private_notes: emp.privateNotes
+          doc_checks: emp.docChecks, notes: emp.notes, private_notes: emp.privateNotes,
+          track_pick_rate: emp.trackPickRate !== false
         }).then(() => {});
       }
     });
@@ -238,7 +241,7 @@ export default function App() {
   const [view, setView] = useState("dashboard"); const [selId, setSelId] = useState(null);
   const [search, setSearch] = useState(""); const [sigDocId, setSigDocId] = useState(null); const [viewSig, setViewSig] = useState(null);
   const [showAE, setShowAE] = useState(false); const [showAD, setShowAD] = useState(false); const [showAP, setShowAP] = useState(false); const [showAssign, setShowAssign] = useState(null);
-  const [nN, sNN] = useState(""); const [nR, sNR] = useState(""); const [nP, sNP] = useState(""); const [nSD, sNSD] = useState(todayDate());
+  const [nN, sNN] = useState(""); const [nR, sNR] = useState(""); const [nP, sNP] = useState(""); const [nSD, sNSD] = useState(todayDate()); const [nTP, sNTP] = useState(true);
   const [nDN, sNDN] = useState(""); const [nDT, sNDT] = useState("sop"); const [nDU, sNDU] = useState(""); const [nDC, sNDC] = useState("");
   const [nPR, sNPR] = useState(""); const [nPD, sNPD] = useState(todayDate()); const [nPW, sNPW] = useState("");
 
@@ -267,8 +270,8 @@ export default function App() {
 
   const addE = async () => {
     if (!nN.trim() || !nP.trim()) return;
-    const emp = { id: "e" + Date.now(), name: nN.trim(), role: nR.trim() || "Team Member", pin: nP.trim(), startDate: nSD, pickHistory: [], docChecks: {}, notes: "", privateNotes: "" };
-    await saveEmp(emp); sNN(""); sNR(""); sNP(""); sNSD(todayDate()); setShowAE(false);
+    const emp = { id: "e" + Date.now(), name: nN.trim(), role: nR.trim() || "Team Member", pin: nP.trim(), startDate: nSD, pickHistory: [], docChecks: {}, notes: "", privateNotes: "", trackPickRate: nTP };
+    await saveEmp(emp); sNN(""); sNR(""); sNP(""); sNSD(todayDate()); sNTP(true); setShowAE(false);
   };
   const remE = async (id) => { await deleteEmp(id); if (selId === id) { setSelId(null); setView("employees"); } };
   const addD = async () => {
@@ -400,6 +403,7 @@ export default function App() {
   // ═══════ EMPLOYEE VIEW ═══════
   if (isEmp && empSelf) {
     const aDocs = getAssignedDocs(docs, empSelf.id); const sp = docPct(empSelf.docChecks, aDocs);
+    const showPick = empSelf.trackPickRate !== false;
     const last = empSelf.pickHistory[empSelf.pickHistory.length - 1]; const lPick = last ? last.rate : null; const lWk = last ? last.wk : null; const lTgt = lWk ? getTarget(lWk) : 60;
     const tr = empSelf.pickHistory.length >= 2 ? empSelf.pickHistory[empSelf.pickHistory.length - 1].rate - empSelf.pickHistory[empSelf.pickHistory.length - 2].rate : 0;
     return (
@@ -409,13 +413,13 @@ export default function App() {
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}><LangSel lang={lang} setLang={setLang} /><button onClick={() => setAuth(null)} style={{ ...nb(false), color: C.red, fontSize: 12 }}>{t.signOut}</button></div>
         </div>
         <div style={{ maxWidth: 720, margin: "0 auto", padding: "28px 20px" }}>
-          <div style={{ ...card, marginBottom: 18 }}>
+          {showPick && <div style={{ ...card, marginBottom: 18 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16, flexWrap: "wrap", gap: 12 }}>
               <div><div style={lbl}>{t.latestPickRate} {lWk ? `(${t.wk} ${lWk})` : ""}</div><div style={{ display: "flex", alignItems: "baseline", gap: 10 }}><span style={{ fontSize: 42, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", color: lPick !== null ? (lPick >= lTgt ? C.green : C.red) : C.textDim }}>{lPick ?? "—"}</span><span style={{ fontSize: 14, color: C.textMuted }}>/ {lTgt} {t.target}</span>{tr !== 0 && <span style={{ fontSize: 13, fontWeight: 600, color: tr > 0 ? C.green : C.red }}>{tr > 0 ? "▲" : "▼"} {Math.abs(tr)}</span>}</div>{lPick !== null && <Badge color={lPick >= lTgt ? C.green : C.red} bg={lPick >= lTgt ? C.greenSoft : C.redSoft}>{lPick >= lTgt ? t.aboveTarget : t.belowTarget}</Badge>}</div>
               <div style={{ textAlign: "right" }}><div style={lbl}>{t.docProgress}</div><div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "flex-end" }}><Ring percent={sp} size={40} stroke={4} color={sp === 100 ? C.green : sp >= 50 ? C.amber : C.red} /><span style={{ fontSize: 18, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>{sp}%</span></div></div>
             </div>
             <div style={lbl}>{t.pickRateTrend}</div><div style={{ overflowX: "auto" }}><PickChart history={empSelf.pickHistory} width={660} height={170} t={t} /></div>
-          </div>
+          </div>}
           {empSelf.notes && <div style={{ ...card, marginBottom: 18 }}><div style={lbl}>{t.notesFromManager}</div><div style={{ fontSize: 13, lineHeight: 1.6, marginTop: 6 }}>{empSelf.notes}</div></div>}
           <div style={card}>
             <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>{t.docProgress}</div><div style={{ color: C.textMuted, fontSize: 12, marginBottom: 16 }}>{t.yourDocStatus}</div>
@@ -429,7 +433,8 @@ export default function App() {
   }
 
   // ═══════ MANAGER VIEW ═══════
-  const avgPick = emps.length ? Math.round(emps.reduce((s, e) => s + (e.pickHistory.length ? e.pickHistory[e.pickHistory.length - 1].rate : 0), 0) / emps.length) : 0;
+  const pickEmps = emps.filter(e => e.trackPickRate !== false);
+  const avgPick = pickEmps.length ? Math.round(pickEmps.reduce((s, e) => s + (e.pickHistory.length ? e.pickHistory[e.pickHistory.length - 1].rate : 0), 0) / pickEmps.length) : 0;
   const avgDoc = emps.length ? Math.round(emps.reduce((s, e) => s + docPct(e.docChecks, getAssignedDocs(docs, e.id)), 0) / emps.length) : 0;
   const fullC = emps.filter(e => docPct(e.docChecks, getAssignedDocs(docs, e.id)) === 100).length;
   const needA = emps.filter(e => { const last = e.pickHistory[e.pickHistory.length - 1]; if (!last) return true; return last.rate < getTarget(last.wk) || docPct(e.docChecks, getAssignedDocs(docs, e.id)) < 40; }).length;
@@ -485,6 +490,7 @@ export default function App() {
           {showAE && <Modal onClose={() => setShowAE(false)}><h3 style={{ fontSize: 17, fontWeight: 700, marginBottom: 18 }}>{t.addEmployee}</h3>
             {[{ l: t.fullName, v: nN, s: sNN, p: "e.g. Jane Smith" },{ l: t.role, v: nR, s: sNR, p: "e.g. Warehouse Operative" },{ l: t.pinForSignIn, v: nP, s: v => sNP(v.replace(/\D/g, "")), p: "e.g. 7777" }].map(f => (<div key={f.l} style={{ marginBottom: 12 }}><label style={lbl}>{f.l}</label><input value={f.v} onChange={e => f.s(e.target.value)} placeholder={f.p} style={inp} /></div>))}
             <div style={{ marginBottom: 12 }}><label style={lbl}>{t.startDate}</label><input type="date" value={nSD} onChange={e => sNSD(e.target.value)} style={inp} /></div>
+            <div style={{ marginBottom: 16 }}><label onClick={() => sNTP(!nTP)} style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", padding: "10px 12px", borderRadius: 8, background: nTP ? C.accentSoft : C.surfaceAlt, border: `1px solid ${nTP ? C.accent : C.border}` }}><div style={{ width: 20, height: 20, borderRadius: 5, border: `2px solid ${nTP ? C.accent : C.textDim}`, background: nTP ? C.accent : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{nTP && <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6L5 8.5L9.5 3.5" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>}</div><span style={{ fontWeight: 600, fontSize: 13, color: nTP ? C.accent : C.textMuted }}>{t.trackPickRate || "Track Pick Rate"}</span></label></div>
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}><button onClick={() => setShowAE(false)} style={{ padding: "9px 18px", borderRadius: 8, border: `1px solid ${C.border}`, background: "transparent", color: C.textMuted, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{t.cancel}</button><button onClick={addE} style={{ padding: "9px 22px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer", opacity: nN.trim() && nP.trim() ? 1 : 0.4 }}>{t.add}</button></div>
           </Modal>}
         </div>)}
@@ -507,11 +513,12 @@ export default function App() {
 
         {view === "detail" && sel && (() => {
           const ad = getAssignedDocs(docs, sel.id); const dp = docPct(sel.docChecks, ad);
+          const showPick = sel.trackPickRate !== false;
           return (<div>
             <button onClick={() => setView("employees")} style={{ background: "transparent", border: "none", color: C.accent, cursor: "pointer", fontSize: 13, fontWeight: 600, marginBottom: 18, padding: 0 }}>{t.backToEmployees}</button>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20, flexWrap: "wrap", gap: 12 }}><div><h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 2 }}>{sel.name}</h2><div style={{ color: C.textMuted, fontSize: 13 }}>{sel.role} · PIN: {sel.pin} · {t.startDate}: {sel.startDate || "—"}</div></div><button onClick={() => { if (window.confirm(`${t.remove} ${sel.name}?`)) remE(sel.id); }} style={{ background: C.redSoft, border: "none", color: C.red, padding: "7px 16px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{t.removeEmployee}</button></div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
-              <div style={card}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}><div><div style={{ fontWeight: 700, fontSize: 15 }}>{t.pickRateHistory}</div><div style={{ color: C.textMuted, fontSize: 12, marginTop: 2 }}>{t.weeklyTracking}</div></div><button onClick={() => setShowAP(true)} style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 12, cursor: "pointer" }}>{t.addWeek}</button></div><div style={{ overflowX: "auto", marginBottom: 8 }}><PickChart history={sel.pickHistory} width={420} height={160} t={t} /></div>{sel.pickHistory.length > 0 && <div style={{ maxHeight: 140, overflowY: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr style={{ borderBottom: `1px solid ${C.border}` }}><th style={{ ...lbl, padding: "6px 8px", textAlign: "left" }}>{t.wk}</th><th style={{ ...lbl, padding: "6px 8px", textAlign: "left" }}>{t.week}</th><th style={{ ...lbl, padding: "6px 8px", textAlign: "right" }}>{t.rate}</th><th style={{ ...lbl, padding: "6px 8px", textAlign: "right" }}>{t.target}</th><th style={{ width: 28 }}></th></tr></thead><tbody>{[...sel.pickHistory].reverse().map((p, i) => { const tgt = getTarget(p.wk); const met = p.rate >= tgt; return (<tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}><td style={{ padding: "6px 8px", fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: C.textMuted }}>{p.wk}</td><td style={{ padding: "6px 8px", fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: C.textDim }}>{p.date}</td><td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", color: met ? C.green : C.red }}>{p.rate}</td><td style={{ padding: "6px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: C.targetYellow }}>{tgt}</td><td style={{ padding: "6px 4px", textAlign: "right" }}><button onClick={async () => { const newHist = sel.pickHistory.filter((_, j) => j !== sel.pickHistory.length - 1 - i); await saveEmp({ ...sel, pickHistory: newHist }); }} style={{ background: "transparent", border: "none", color: C.textDim, cursor: "pointer", fontSize: 11 }}>✕</button></td></tr>); })}</tbody></table></div>}</div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20, flexWrap: "wrap", gap: 12 }}><div><h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 2 }}>{sel.name}</h2><div style={{ color: C.textMuted, fontSize: 13 }}>{sel.role} · PIN: {sel.pin} · {t.startDate}: {sel.startDate || "—"}</div></div><div style={{ display: "flex", gap: 8 }}><button onClick={async () => { await saveEmp({ ...sel, trackPickRate: !showPick }); }} style={{ padding: "7px 14px", borderRadius: 7, border: `1px solid ${C.border}`, background: showPick ? C.accentSoft : "transparent", color: showPick ? C.accent : C.textDim, fontWeight: 600, fontSize: 11, cursor: "pointer" }}>{showPick ? "✓ " : ""}{t.pickRate}</button><button onClick={() => { if (window.confirm(`${t.remove} ${sel.name}?`)) remE(sel.id); }} style={{ background: C.redSoft, border: "none", color: C.red, padding: "7px 16px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{t.removeEmployee}</button></div></div>
+            <div style={{ display: "grid", gridTemplateColumns: showPick ? "1fr 1fr" : "1fr", gap: 18 }}>
+              {showPick && <div style={card}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}><div><div style={{ fontWeight: 700, fontSize: 15 }}>{t.pickRateHistory}</div><div style={{ color: C.textMuted, fontSize: 12, marginTop: 2 }}>{t.weeklyTracking}</div></div><button onClick={() => setShowAP(true)} style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 12, cursor: "pointer" }}>{t.addWeek}</button></div><div style={{ overflowX: "auto", marginBottom: 8 }}><PickChart history={sel.pickHistory} width={420} height={160} t={t} /></div>{sel.pickHistory.length > 0 && <div style={{ maxHeight: 140, overflowY: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr style={{ borderBottom: `1px solid ${C.border}` }}><th style={{ ...lbl, padding: "6px 8px", textAlign: "left" }}>{t.wk}</th><th style={{ ...lbl, padding: "6px 8px", textAlign: "left" }}>{t.week}</th><th style={{ ...lbl, padding: "6px 8px", textAlign: "right" }}>{t.rate}</th><th style={{ ...lbl, padding: "6px 8px", textAlign: "right" }}>{t.target}</th><th style={{ width: 28 }}></th></tr></thead><tbody>{[...sel.pickHistory].reverse().map((p, i) => { const tgt = getTarget(p.wk); const met = p.rate >= tgt; return (<tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}><td style={{ padding: "6px 8px", fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: C.textMuted }}>{p.wk}</td><td style={{ padding: "6px 8px", fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: C.textDim }}>{p.date}</td><td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", color: met ? C.green : C.red }}>{p.rate}</td><td style={{ padding: "6px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: C.targetYellow }}>{tgt}</td><td style={{ padding: "6px 4px", textAlign: "right" }}><button onClick={async () => { const newHist = sel.pickHistory.filter((_, j) => j !== sel.pickHistory.length - 1 - i); await saveEmp({ ...sel, pickHistory: newHist }); }} style={{ background: "transparent", border: "none", color: C.textDim, cursor: "pointer", fontSize: 11 }}>✕</button></td></tr>); })}</tbody></table></div>}</div>}
               <div style={card}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}><div><div style={{ fontWeight: 700, fontSize: 15 }}>{t.docProgress}</div><div style={{ color: C.textMuted, fontSize: 12, marginTop: 2 }}>{t.assignedDocs}</div></div><div style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center" }}><Ring percent={dp} size={50} stroke={5} color={dp === 100 ? C.green : dp >= 50 ? C.amber : C.red} /><span style={{ position: "absolute", fontSize: 11, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>{dp}%</span></div></div>{ad.length === 0 && <div style={{ color: C.textDim }}>{t.noDocsAssigned}</div>}<div style={{ display: "flex", flexDirection: "column", gap: 5, maxHeight: 300, overflowY: "auto" }}>{["sop", "contract"].map(type => { const td = ad.filter(d => d.type === type); if (!td.length) return null; return (<div key={type}><div style={{ fontSize: 10, color: C.textDim, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.8, margin: "8px 0 6px" }}>{type === "sop" ? t.sopsDocs : t.contractsDocs}</div>{td.map(doc => <EmpDocItem key={doc.id} doc={doc} emp={sel} isMgr={true} />)}</div>); })}</div></div>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18, marginTop: 18 }}>
