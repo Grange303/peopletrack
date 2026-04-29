@@ -118,6 +118,49 @@ function useLang() {
   return [lang, set];
 }
 
+// ── Onboarding hooks ──
+function useOnboardingDocs() {
+  const [obDocs, setObDocs] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const fetch_ = useCallback(async () => {
+    const { data } = await supabase.from("onboarding_documents").select("*").eq("active", true).order("sort_order");
+    if (data) setObDocs(data);
+    setLoaded(true);
+  }, []);
+  useEffect(() => { fetch_(); }, [fetch_]);
+  return { obDocs, loaded, refresh: fetch_ };
+}
+
+function useOnboardingSubs() {
+  const [subs, setSubs] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const fetch_ = useCallback(async () => {
+    const { data } = await supabase.from("onboarding_submissions").select("*");
+    if (data) setSubs(data);
+    setLoaded(true);
+  }, []);
+  useEffect(() => { fetch_(); }, [fetch_]);
+  const saveSub = useCallback(async (sub) => {
+    await supabase.from("onboarding_submissions").upsert(sub);
+    await fetch_();
+  }, [fetch_]);
+  return { subs, loaded, saveSub, refresh: fetch_ };
+}
+
+// Flagging: check questionnaire answers for "yes" on flagged questions
+function computeFlags(doc, answers) {
+  if (doc.kind !== "questionnaire") return [];
+  const body = doc.body;
+  const flags = [];
+  (body.questions || []).forEach(q => {
+    const ans = answers?.[q.id]?.value;
+    if (q.flag_on && ans === q.flag_on) {
+      flags.push({ questionId: q.id, question: q.text, answer: ans });
+    }
+  });
+  return flags;
+}
+
 const todayDate = () => new Date().toISOString().slice(0, 10);
 const nowDateTime = () => { const d = new Date(); return d.toISOString().slice(0, 10) + " " + d.toTimeString().slice(0, 5); };
 function getTarget(wk) { if (wk <= 0) return 30; const ramp = 30 + (wk - 1) * 2; if (wk >= 18 || ramp >= 60) return 60; return ramp; }
@@ -229,11 +272,190 @@ function PickChart({ history, width=340, height=160, t }) {
 function Badge({children,color,bg}){return<span style={{display:"inline-block",padding:"3px 10px",borderRadius:99,fontSize:11,fontWeight:600,color,background:bg}}>{children}</span>;}
 function Ring({percent,size=48,stroke=4,color}){const r=(size-stroke)/2,ci=2*Math.PI*r,off=ci-(percent/100)*ci;return(<svg width={size} height={size} style={{transform:"rotate(-90deg)"}}><circle cx={size/2} cy={size/2} r={r} fill="none" stroke={C.border} strokeWidth={stroke}/><circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth={stroke} strokeDasharray={ci} strokeDashoffset={off} strokeLinecap="round" style={{transition:"stroke-dashoffset 0.5s"}}/></svg>);}
 
+// ── Onboarding: Employee Document View ──
+function OnboardingDocView({ doc, existing, empName, onSubmit, onCancel, t }) {
+  const body = doc.body;
+  const [answers, setAnswers] = useState(existing?.answers || {});
+  const [sigPng, setSigPng] = useState(null);
+  const [hasDrawn, setHasDrawn] = useState(false);
+  const canvasRef = useRef(null);
+  const drawing = useRef(false);
+  const gp = e => { const r = canvasRef.current.getBoundingClientRect(); const p = e.touches ? e.touches[0] : e; return { x: p.clientX - r.left, y: p.clientY - r.top }; };
+  const sd = e => { e.preventDefault(); drawing.current = true; const ctx = canvasRef.current.getContext("2d"); const p = gp(e); ctx.beginPath(); ctx.moveTo(p.x, p.y); };
+  const mv = e => { if (!drawing.current) return; e.preventDefault(); setHasDrawn(true); const ctx = canvasRef.current.getContext("2d"); const p = gp(e); ctx.lineTo(p.x, p.y); ctx.strokeStyle = C.text; ctx.lineWidth = 2.5; ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.stroke(); };
+  const ed = () => { drawing.current = false; };
+  const clearSig = () => { canvasRef.current.getContext("2d").clearRect(0, 0, canvasRef.current.width, canvasRef.current.height); setHasDrawn(false); };
+
+  const isComplete = () => {
+    if (doc.kind === "acknowledge") return !!answers.acknowledged;
+    if (doc.kind === "checklist") return (body.items || []).every(it => answers.items?.[it.id]);
+    if (doc.kind === "questionnaire") return (body.questions || []).every(q => answers[q.id]?.value === "yes" || answers[q.id]?.value === "no");
+    return false;
+  };
+  const canSubmit = isComplete() && hasDrawn;
+
+  const handleSubmit = () => {
+    if (!canSubmit) return;
+    const sig = canvasRef.current.toDataURL("image/png");
+    onSubmit(answers, sig);
+  };
+
+  const lbl = { display: "block", fontSize: 11, color: C.textMuted, marginBottom: 5, textTransform: "uppercase", letterSpacing: 0.8, fontWeight: 600 };
+
+  return (
+    <div>
+      <button onClick={onCancel} style={{ background: "transparent", border: "none", color: C.accent, cursor: "pointer", fontSize: 13, fontWeight: 600, marginBottom: 14, padding: 0 }}>← Back</button>
+      <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 8 }}>{doc.title}</h2>
+      {body.intro && <p style={{ color: C.textMuted, fontSize: 13, lineHeight: 1.6, marginBottom: 20 }}>{body.intro}</p>}
+
+      {/* Acknowledge type */}
+      {doc.kind === "acknowledge" && (
+        <div>
+          {(body.sections || []).map((sec, i) => (
+            <div key={i} style={{ marginBottom: 16, padding: "14px 16px", background: C.surfaceAlt, borderRadius: 10, border: `1px solid ${C.border}` }}>
+              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6, color: C.text }}>{sec.title}</div>
+              <div style={{ fontSize: 13, color: C.textMuted, lineHeight: 1.6 }}>{sec.content}</div>
+            </div>
+          ))}
+          <label onClick={() => setAnswers({ ...answers, acknowledged: !answers.acknowledged })} style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", padding: "12px 14px", borderRadius: 10, background: answers.acknowledged ? C.greenSoft : C.surfaceAlt, border: `1px solid ${answers.acknowledged ? "rgba(34,197,94,0.25)" : C.border}`, marginTop: 12 }}>
+            <div style={{ width: 22, height: 22, borderRadius: 6, border: `2px solid ${answers.acknowledged ? C.green : C.textDim}`, background: answers.acknowledged ? C.green : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{answers.acknowledged && <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 7L6 10L11 4" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>}</div>
+            <span style={{ fontSize: 13, fontWeight: 600, color: answers.acknowledged ? C.green : C.text }}>I have read and understood this document</span>
+          </label>
+        </div>
+      )}
+
+      {/* Checklist type */}
+      {doc.kind === "checklist" && (
+        <div>
+          {(body.items || []).map(item => {
+            const ticked = !!answers.items?.[item.id];
+            return (
+              <label key={item.id} onClick={() => { const items = { ...(answers.items || {}), [item.id]: !ticked }; setAnswers({ ...answers, items }); }} style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", padding: "10px 14px", borderRadius: 8, background: ticked ? C.greenSoft : C.surfaceAlt, border: `1px solid ${ticked ? "rgba(34,197,94,0.18)" : C.border}`, marginBottom: 6 }}>
+                <div style={{ width: 20, height: 20, borderRadius: 5, border: `2px solid ${ticked ? C.green : C.textDim}`, background: ticked ? C.green : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 2 }}>{ticked && <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6L5 8.5L9.5 3.5" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>}</div>
+                <span style={{ fontSize: 13, color: ticked ? C.green : C.text, lineHeight: 1.5 }}>{item.text}</span>
+              </label>
+            );
+          })}
+          <div style={{ fontSize: 12, color: C.textMuted, marginTop: 8 }}>
+            {Object.values(answers.items || {}).filter(Boolean).length} / {(body.items || []).length} completed
+          </div>
+        </div>
+      )}
+
+      {/* Questionnaire type */}
+      {doc.kind === "questionnaire" && (
+        <div>
+          {(body.questions || []).map(q => {
+            const val = answers[q.id]?.value;
+            const flagged = q.flag_on && val === q.flag_on;
+            return (
+              <div key={q.id} style={{ padding: "12px 14px", borderRadius: 10, background: flagged ? C.redSoft : C.surfaceAlt, border: `1px solid ${flagged ? "rgba(239,68,68,0.2)" : C.border}`, marginBottom: 8 }}>
+                <div style={{ fontSize: 13, color: C.text, lineHeight: 1.5, marginBottom: 10 }}>{q.text}</div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  {["yes", "no"].map(opt => (
+                    <button key={opt} onClick={() => setAnswers({ ...answers, [q.id]: { value: opt } })} style={{ padding: "6px 20px", borderRadius: 7, border: `1px solid ${val === opt ? (opt === "yes" && q.flag_on === "yes" ? C.red : C.green) : C.border}`, background: val === opt ? (opt === "yes" && q.flag_on === "yes" ? C.redSoft : C.greenSoft) : "transparent", color: val === opt ? (opt === "yes" && q.flag_on === "yes" ? C.red : C.green) : C.textMuted, fontWeight: 600, fontSize: 12, cursor: "pointer", textTransform: "capitalize" }}>{opt === "yes" ? "Yes" : "No"}</button>
+                  ))}
+                </div>
+                {flagged && <div style={{ fontSize: 11, color: C.red, marginTop: 6, fontWeight: 600 }}>⚠ This answer will be flagged for manager review</div>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Signature */}
+      {isComplete() && (
+        <div style={{ marginTop: 20 }}>
+          <div style={{ padding: "12px 14px", borderRadius: 8, background: "rgba(251,191,36,0.08)", border: "1px solid rgba(251,191,36,0.15)", color: C.text, fontSize: 12, lineHeight: 1.6, marginBottom: 14 }}>
+            <strong style={{ color: C.targetYellow }}>Declaration:</strong> I, {empName}, confirm that I have read, understood, and completed this document truthfully.
+          </div>
+          <div style={lbl}>Sign below</div>
+          <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden", background: C.surfaceAlt, marginBottom: 12, position: "relative" }}>
+            <canvas ref={canvasRef} width={320} height={120} style={{ display: "block", width: "100%", height: 120, cursor: "crosshair", touchAction: "none" }} onMouseDown={sd} onMouseMove={mv} onMouseUp={ed} onMouseLeave={ed} onTouchStart={sd} onTouchMove={mv} onTouchEnd={ed} />
+            {!hasDrawn && <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", color: C.textDim, fontSize: 13, pointerEvents: "none" }}>Sign here</div>}
+          </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            <button onClick={clearSig} style={{ padding: "7px 14px", borderRadius: 7, border: `1px solid ${C.border}`, background: "transparent", color: C.textMuted, fontWeight: 600, fontSize: 12, cursor: "pointer" }}>{t.clear}</button>
+            <button onClick={handleSubmit} style={{ padding: "7px 18px", borderRadius: 7, border: "none", background: C.green, color: "#fff", fontWeight: 600, fontSize: 12, cursor: "pointer", opacity: canSubmit ? 1 : 0.4 }}>Submit & Sign</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Onboarding: Manager Review Detail ──
+function ManagerReviewDetail({ sub, doc, empName, onApprove, onReject, onBack, t }) {
+  const [notes, setNotes] = useState(sub.manager_notes || "");
+  const [sigPng, setSigPng] = useState(null);
+  const [hasDrawn, setHasDrawn] = useState(false);
+  const canvasRef = useRef(null);
+  const drawing = useRef(false);
+  const gp = e => { const r = canvasRef.current.getBoundingClientRect(); const p = e.touches ? e.touches[0] : e; return { x: p.clientX - r.left, y: p.clientY - r.top }; };
+  const sd = e => { e.preventDefault(); drawing.current = true; const ctx = canvasRef.current.getContext("2d"); const p = gp(e); ctx.beginPath(); ctx.moveTo(p.x, p.y); };
+  const mv = e => { if (!drawing.current) return; e.preventDefault(); setHasDrawn(true); const ctx = canvasRef.current.getContext("2d"); const p = gp(e); ctx.lineTo(p.x, p.y); ctx.strokeStyle = C.text; ctx.lineWidth = 2.5; ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.stroke(); };
+  const ed = () => { drawing.current = false; };
+  const body = doc.body;
+
+  return (
+    <div>
+      <button onClick={onBack} style={{ background: "transparent", border: "none", color: C.accent, cursor: "pointer", fontSize: 13, fontWeight: 600, marginBottom: 14, padding: 0 }}>← Back</button>
+      <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 4 }}>{doc.title}</h2>
+      <div style={{ color: C.textMuted, fontSize: 13, marginBottom: 16 }}>Submitted by {empName} · {sub.submitted_at ? new Date(sub.submitted_at).toLocaleString() : ""}</div>
+
+      {sub.flag_reasons?.length > 0 && (
+        <div style={{ padding: "12px 14px", borderRadius: 10, background: C.redSoft, border: "1px solid rgba(239,68,68,0.2)", marginBottom: 16 }}>
+          <div style={{ fontWeight: 700, fontSize: 13, color: C.red, marginBottom: 8 }}>⚠ Flagged Answers ({sub.flag_reasons.length})</div>
+          {sub.flag_reasons.map((f, i) => (
+            <div key={i} style={{ fontSize: 12, color: C.text, marginBottom: 4 }}>• {f.question} — answered <strong style={{ color: C.red }}>{f.answer}</strong></div>
+          ))}
+        </div>
+      )}
+
+      {/* Show answers */}
+      {doc.kind === "acknowledge" && <div style={{ padding: "10px 14px", borderRadius: 8, background: C.greenSoft, fontSize: 13, color: C.green, marginBottom: 12 }}>✅ Employee acknowledged all sections</div>}
+      {doc.kind === "checklist" && (
+        <div style={{ marginBottom: 12 }}>{(body.items || []).map(item => {
+          const ticked = !!sub.answers?.items?.[item.id];
+          return <div key={item.id} style={{ padding: "6px 10px", fontSize: 12, color: ticked ? C.green : C.red, display: "flex", gap: 6, alignItems: "center" }}>{ticked ? "✅" : "❌"} {item.text}</div>;
+        })}</div>
+      )}
+      {doc.kind === "questionnaire" && (
+        <div style={{ marginBottom: 12 }}>{(body.questions || []).map(q => {
+          const val = sub.answers?.[q.id]?.value;
+          const flagged = q.flag_on && val === q.flag_on;
+          return <div key={q.id} style={{ padding: "8px 10px", fontSize: 12, color: flagged ? C.red : C.text, background: flagged ? C.redSoft : "transparent", borderRadius: 6, marginBottom: 4 }}>{q.text}: <strong>{val || "—"}</strong></div>;
+        })}</div>
+      )}
+
+      {sub.signature_png && <div style={{ marginBottom: 16 }}><div style={{ fontSize: 11, color: C.textMuted, fontWeight: 600, textTransform: "uppercase", marginBottom: 6 }}>Employee Signature</div><img src={sub.signature_png} alt="Sig" style={{ maxWidth: 300, borderRadius: 8, border: `1px solid ${C.border}`, background: C.surfaceAlt }} /></div>}
+
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 11, color: C.textMuted, fontWeight: 600, textTransform: "uppercase", marginBottom: 5 }}>Manager Notes</div>
+        <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={3} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surfaceAlt, color: C.text, fontSize: 13, outline: "none", boxSizing: "border-box", fontFamily: "inherit", resize: "vertical" }} placeholder="Add notes if needed..." />
+      </div>
+
+      <div style={{ fontSize: 11, color: C.textMuted, fontWeight: 600, textTransform: "uppercase", marginBottom: 5 }}>Manager Countersignature</div>
+      <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden", background: C.surfaceAlt, marginBottom: 12, position: "relative" }}>
+        <canvas ref={canvasRef} width={320} height={100} style={{ display: "block", width: "100%", height: 100, cursor: "crosshair", touchAction: "none" }} onMouseDown={sd} onMouseMove={mv} onMouseUp={ed} onMouseLeave={ed} onTouchStart={sd} onTouchMove={mv} onTouchEnd={ed} />
+        {!hasDrawn && <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", color: C.textDim, fontSize: 12, pointerEvents: "none" }}>Countersign here</div>}
+      </div>
+
+      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+        <button onClick={() => onReject(notes)} style={{ padding: "9px 18px", borderRadius: 8, border: "none", background: C.redSoft, color: C.red, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>Reject</button>
+        <button onClick={() => { if (!hasDrawn) return; onApprove(notes, canvasRef.current.toDataURL("image/png")); }} style={{ padding: "9px 22px", borderRadius: 8, border: "none", background: C.green, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer", opacity: hasDrawn ? 1 : 0.4 }}>Approve & Countersign</button>
+      </div>
+    </div>
+  );
+}
+
 // ═══════ MAIN APP ═══════
 export default function App() {
   const { emps, setEmps, saveEmp, deleteEmp, loaded: eL, refresh: refreshEmps } = useEmployees();
   const { docs, setDocs, saveDoc, deleteDoc, loaded: dL, refresh: refreshDocs } = useDocs();
   const { managerPin, loaded: sL } = useSettings();
+  const { obDocs, loaded: obDL, refresh: refreshObDocs } = useOnboardingDocs();
+  const { subs: obSubs, loaded: obSL, saveSub: saveObSub, refresh: refreshObSubs } = useOnboardingSubs();
   const [lang, setLang] = useLang();
 
   const [auth, setAuth] = useState(null);
@@ -244,15 +466,16 @@ export default function App() {
   const [nN, sNN] = useState(""); const [nR, sNR] = useState(""); const [nP, sNP] = useState(""); const [nSD, sNSD] = useState(todayDate()); const [nTP, sNTP] = useState(true);
   const [nDN, sNDN] = useState(""); const [nDT, sNDT] = useState("sop"); const [nDU, sNDU] = useState(""); const [nDC, sNDC] = useState("");
   const [nPR, sNPR] = useState(""); const [nPD, sNPD] = useState(todayDate()); const [nPW, sNPW] = useState("");
+  const [obOpenDocId, setObOpenDocId] = useState(null); const [obReviewId, setObReviewId] = useState(null);
 
   // Auto-refresh data every 30 seconds so changes show up across devices
   useEffect(() => {
-    const interval = setInterval(() => { refreshEmps(); refreshDocs(); }, 30000);
+    const interval = setInterval(() => { refreshEmps(); refreshDocs(); refreshObSubs(); }, 30000);
     return () => clearInterval(interval);
-  }, [refreshEmps, refreshDocs]);
+  }, [refreshEmps, refreshDocs, refreshObSubs]);
 
   const t = T[lang] || T.en;
-  const loaded = eL && dL && sL;
+  const loaded = eL && dL && sL && obDL && obSL;
   const isEmp = auth?.role === "employee";
   const empSelf = isEmp ? emps.find(e => e.id === auth.id) : null;
   const sel = emps.find(e => e.id === selId);
@@ -321,6 +544,46 @@ export default function App() {
     const emp = emps.find(e => e.id === empId); if (!emp) return;
     const existing = emp.docChecks[docId] || {};
     await saveEmp({ ...emp, docChecks: { ...emp.docChecks, [docId]: { ...existing, date: existing.date || todayDate(), dateTime: existing.dateTime || nowDateTime(), signedBy: existing.signedBy || emp.name, status: "signed", signedConfirmedAt: nowDateTime() } } });
+  };
+
+  // Onboarding functions
+  const submitOnboardingDoc = async (empId, docId, answers, sigPng) => {
+    const doc = obDocs.find(d => d.id === docId);
+    const flags = doc ? computeFlags(doc, answers) : [];
+    const status = flags.length > 0 ? "flagged" : "submitted";
+    await saveObSub({
+      id: `ob_${empId}_${docId}`,
+      employee_id: empId,
+      document_id: docId,
+      answers,
+      signature_png: sigPng,
+      status,
+      flag_reasons: flags,
+      submitted_at: new Date().toISOString()
+    });
+    setObOpenDocId(null);
+  };
+
+  const approveOnboardingSub = async (subId, notes, mgrSigPng) => {
+    const sub = obSubs.find(s => s.id === subId);
+    if (!sub) return;
+    await saveObSub({ ...sub, status: "approved", manager_notes: notes, manager_signature_png: mgrSigPng, reviewed_at: new Date().toISOString(), reviewed_by: "manager" });
+    setObReviewId(null);
+  };
+
+  const rejectOnboardingSub = async (subId, notes) => {
+    const sub = obSubs.find(s => s.id === subId);
+    if (!sub) return;
+    await saveObSub({ ...sub, status: "rejected", manager_notes: notes, reviewed_at: new Date().toISOString(), reviewed_by: "manager" });
+    setObReviewId(null);
+  };
+
+  const getEmpObProgress = (empId) => {
+    if (!obDocs.length) return { total: 0, done: 0, pct: 0, hasFlagged: false };
+    const empSubs = obSubs.filter(s => s.employee_id === empId);
+    const approved = empSubs.filter(s => s.status === "approved").length;
+    const flagged = empSubs.some(s => s.status === "flagged");
+    return { total: obDocs.length, done: approved, pct: Math.round((approved / obDocs.length) * 100), hasFlagged: flagged };
   };
 
   const nb = a => ({ padding: "9px 16px", borderRadius: 8, border: "none", background: a ? C.accentSoft : "transparent", color: a ? C.accent : C.textMuted, fontWeight: 600, fontSize: 13, cursor: "pointer" });
@@ -426,6 +689,57 @@ export default function App() {
             {aDocs.length === 0 && <div style={{ color: C.textDim }}>{t.noDocsAssigned}</div>}
             {["sop", "contract"].map(type => { const td = aDocs.filter(d => d.type === type); if (!td.length) return null; return (<div key={type} style={{ marginBottom: 16 }}><div style={{ fontSize: 11, color: C.textMuted, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 8 }}>{type === "sop" ? t.sops : t.contracts}</div>{td.map(doc => <EmpDocItem key={doc.id} doc={doc} emp={empSelf} isMgr={false} />)}</div>); })}
           </div>
+
+          {/* Employee Onboarding Section */}
+          {obDocs.length > 0 && (
+            <div style={{ ...card, marginTop: 18 }}>
+              <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Onboarding Documents</div>
+              <div style={{ color: C.textMuted, fontSize: 12, marginBottom: 16 }}>Complete all onboarding documents below</div>
+
+              {obOpenDocId ? (() => {
+                const doc = obDocs.find(d => d.id === obOpenDocId);
+                const existing = obSubs.find(s => s.employee_id === empSelf.id && s.document_id === obOpenDocId);
+                if (!doc) return null;
+                if (existing && (existing.status === "submitted" || existing.status === "flagged" || existing.status === "approved")) {
+                  return (
+                    <div>
+                      <button onClick={() => setObOpenDocId(null)} style={{ background: "transparent", border: "none", color: C.accent, cursor: "pointer", fontSize: 13, fontWeight: 600, marginBottom: 14, padding: 0 }}>← Back</button>
+                      <div style={{ padding: "16px", borderRadius: 10, background: existing.status === "approved" ? C.greenSoft : existing.status === "rejected" ? C.redSoft : C.amberSoft, textAlign: "center" }}>
+                        <div style={{ fontSize: 28, marginBottom: 8 }}>{existing.status === "approved" ? "✅" : existing.status === "rejected" ? "❌" : "📨"}</div>
+                        <div style={{ fontWeight: 700, fontSize: 15 }}>{doc.title}</div>
+                        <div style={{ color: C.textMuted, fontSize: 12, marginTop: 4 }}>{existing.status === "approved" ? "Approved by manager" : existing.status === "rejected" ? "Rejected — please speak to your manager" : "Submitted — awaiting manager review"}</div>
+                        {existing.manager_notes && <div style={{ marginTop: 10, padding: "8px 12px", borderRadius: 8, background: C.surfaceAlt, fontSize: 12, color: C.text }}>Manager note: {existing.manager_notes}</div>}
+                      </div>
+                    </div>
+                  );
+                }
+                return <OnboardingDocView doc={doc} existing={existing} empName={empSelf.name} t={t} onSubmit={(ans, sig) => submitOnboardingDoc(empSelf.id, doc.id, ans, sig)} onCancel={() => setObOpenDocId(null)} />;
+              })() : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {obDocs.map(doc => {
+                    const sub = obSubs.find(s => s.employee_id === empSelf.id && s.document_id === doc.id);
+                    const st = sub?.status;
+                    const icon = st === "approved" ? "✅" : st === "flagged" ? "⚠️" : st === "submitted" ? "📨" : st === "rejected" ? "❌" : "📋";
+                    const bg = st === "approved" ? C.greenSoft : st === "flagged" || st === "submitted" ? C.amberSoft : st === "rejected" ? C.redSoft : C.surfaceAlt;
+                    const borderCol = st === "approved" ? "rgba(34,197,94,0.18)" : st === "rejected" ? "rgba(239,68,68,0.18)" : C.border;
+                    const canOpen = !st || st === "draft" || st === "rejected";
+                    return (
+                      <div key={doc.id} onClick={() => setObOpenDocId(doc.id)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px", borderRadius: 10, background: bg, border: `1px solid ${borderCol}`, cursor: "pointer" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <span style={{ fontSize: 18 }}>{icon}</span>
+                          <div>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: st === "approved" ? C.green : C.text }}>{doc.title}</div>
+                            <div style={{ fontSize: 10, color: C.textMuted }}>{doc.kind === "acknowledge" ? "Read & acknowledge" : doc.kind === "checklist" ? "Training checklist" : "Questionnaire"}{st ? ` · ${st}` : ""}</div>
+                          </div>
+                        </div>
+                        {canOpen && <span style={{ color: C.accent, fontSize: 12, fontWeight: 600 }}>Open →</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
         </div>
         {viewSig && <Modal onClose={() => setViewSig(null)}><h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 14 }}>{t.signature}</h3><img src={viewSig} alt="Sig" style={{ width: "100%", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surfaceAlt }} /><div style={{ textAlign: "right", marginTop: 12 }}><button onClick={() => setViewSig(null)} style={{ padding: "8px 18px", borderRadius: 7, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{t.close}</button></div></Modal>}
       </div>
@@ -447,6 +761,7 @@ export default function App() {
           <button style={nb(view === "dashboard")} onClick={() => setView("dashboard")}>{t.dashboard}</button>
           <button style={nb(view === "employees" || view === "detail")} onClick={() => setView("employees")}>{t.employees}</button>
           <button style={nb(view === "documents")} onClick={() => setView("documents")}>{t.documents}</button>
+          <button style={nb(view === "onboarding")} onClick={() => setView("onboarding")}>Onboarding</button>
           <button onClick={() => exportXLS(emps, docs, t)} style={{ padding: "9px 16px", borderRadius: 8, border: "none", background: "rgba(34,197,94,0.15)", color: C.green, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>📊 {t.exportExcel}</button>
           <div style={{ width: 1, height: 24, background: C.border, margin: "0 4px" }} /><LangSel lang={lang} setLang={setLang} />
           <button onClick={() => setAuth(null)} style={{ ...nb(false), color: C.red, fontSize: 12 }}>{t.signOut}</button>
@@ -509,6 +824,87 @@ export default function App() {
             {nDT === "contract" && <div style={{ marginBottom: 12 }}><label style={lbl}>{t.contractText}</label><textarea value={nDC} onChange={e => sNDC(e.target.value)} placeholder="Paste the full contract wording here..." rows={10} style={{ ...inp, resize: "vertical", lineHeight: 1.6 }} /><div style={{ fontSize: 11, color: C.textDim, marginTop: 4 }}>{t.contractTextHint}</div></div>}
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}><button onClick={() => setShowAD(false)} style={{ padding: "9px 18px", borderRadius: 8, border: `1px solid ${C.border}`, background: "transparent", color: C.textMuted, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{t.cancel}</button><button onClick={addD} style={{ padding: "9px 22px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer", opacity: nDN.trim() ? 1 : 0.4 }}>{t.add}</button></div>
           </Modal>}
+        </div>)}
+
+        {/* ═══ ONBOARDING (Manager) ═══ */}
+        {view === "onboarding" && (<div>
+          <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>Onboarding</h2>
+          <p style={{ color: C.textMuted, marginBottom: 24, fontSize: 13 }}>Track new employee onboarding progress and review submissions</p>
+
+          {/* Review queue - flagged/submitted items */}
+          {(() => {
+            const pendingSubs = obSubs.filter(s => s.status === "flagged" || s.status === "submitted");
+            if (pendingSubs.length > 0 && !obReviewId) return (
+              <div style={{ ...card, marginBottom: 20, borderLeft: `3px solid ${C.amber}` }}>
+                <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 12 }}>📋 Pending Reviews ({pendingSubs.length})</div>
+                {pendingSubs.map(sub => {
+                  const doc = obDocs.find(d => d.id === sub.document_id);
+                  const emp = emps.find(e => e.id === sub.employee_id);
+                  return (
+                    <div key={sub.id} onClick={() => setObReviewId(sub.id)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", borderRadius: 8, background: sub.status === "flagged" ? C.redSoft : C.surfaceAlt, border: `1px solid ${sub.status === "flagged" ? "rgba(239,68,68,0.2)" : C.border}`, marginBottom: 6, cursor: "pointer" }}>
+                      <div><div style={{ fontWeight: 600, fontSize: 13 }}>{emp?.name || "Unknown"}</div><div style={{ fontSize: 11, color: C.textMuted }}>{doc?.title || "Unknown document"}</div></div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        {sub.status === "flagged" && <span style={{ padding: "2px 8px", borderRadius: 99, fontSize: 10, fontWeight: 700, background: C.redSoft, color: C.red }}>⚠ {sub.flag_reasons?.length || 0} flags</span>}
+                        <span style={{ color: C.textDim }}>›</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+            return null;
+          })()}
+
+          {/* Review detail */}
+          {obReviewId && (() => {
+            const sub = obSubs.find(s => s.id === obReviewId);
+            if (!sub) return null;
+            const doc = obDocs.find(d => d.id === sub.document_id);
+            const emp = emps.find(e => e.id === sub.employee_id);
+            if (!doc) return null;
+            return (
+              <div style={card}>
+                <ManagerReviewDetail sub={sub} doc={doc} empName={emp?.name || "Unknown"} t={t} onBack={() => setObReviewId(null)} onApprove={(notes, sig) => approveOnboardingSub(sub.id, notes, sig)} onReject={(notes) => rejectOnboardingSub(sub.id, notes)} />
+              </div>
+            );
+          })()}
+
+          {/* Employee onboarding progress */}
+          {!obReviewId && (
+            <div style={{ ...card, padding: 0, overflow: "hidden" }}>
+              <div style={{ padding: "14px 18px", borderBottom: `1px solid ${C.border}`, fontWeight: 600, fontSize: 13 }}>Employee Onboarding Progress</div>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                    <th style={{ textAlign: "left", padding: "10px 14px", fontSize: 11, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, fontWeight: 600 }}>Employee</th>
+                    {obDocs.map(d => <th key={d.id} style={{ textAlign: "center", padding: "10px 8px", fontSize: 10, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600, maxWidth: 100 }}>{d.title.length > 20 ? d.title.slice(0, 18) + "…" : d.title}</th>)}
+                    <th style={{ textAlign: "center", padding: "10px 14px", fontSize: 11, color: C.textMuted, textTransform: "uppercase", fontWeight: 600 }}>Progress</th>
+                  </tr></thead>
+                  <tbody>{emps.map(emp => {
+                    const prog = getEmpObProgress(emp.id);
+                    return (
+                      <tr key={emp.id} style={{ borderBottom: `1px solid ${C.border}` }}>
+                        <td style={{ padding: "10px 14px", fontWeight: 600, fontSize: 13 }}>{emp.name}<div style={{ fontSize: 11, color: C.textMuted }}>{emp.role}</div></td>
+                        {obDocs.map(d => {
+                          const sub = obSubs.find(s => s.employee_id === emp.id && s.document_id === d.id);
+                          const st = sub?.status;
+                          const icon = st === "approved" ? "✅" : st === "flagged" ? "⚠️" : st === "submitted" ? "📨" : st === "rejected" ? "❌" : "⬜";
+                          const bgCol = st === "approved" ? C.greenSoft : st === "flagged" ? C.redSoft : st === "submitted" ? C.amberSoft : "transparent";
+                          return <td key={d.id} style={{ textAlign: "center", padding: "8px", fontSize: 16, background: bgCol }}>{icon}</td>;
+                        })}
+                        <td style={{ textAlign: "center", padding: "10px 14px" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6, justifyContent: "center" }}>
+                            <div style={{ width: 60, height: 5, background: C.border, borderRadius: 99, overflow: "hidden" }}><div style={{ width: `${prog.pct}%`, height: "100%", background: prog.pct === 100 ? C.green : C.amber, borderRadius: 99 }} /></div>
+                            <span style={{ fontSize: 11, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", color: prog.pct === 100 ? C.green : C.textMuted }}>{prog.done}/{prog.total}</span>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}</tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>)}
 
         {view === "detail" && sel && (() => {
