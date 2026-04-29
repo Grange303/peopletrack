@@ -787,11 +787,11 @@ export default function App() {
   // ═══════ EMPLOYEE VIEW ═══════
   if (!isManager && !isSupervisor) {
     const empSelfView = emps.find(e => e.id === auth?.id);
-    if (!empSelfViewView) return <div style={{ minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", color: C.textMuted, fontFamily: "'DM Sans', sans-serif" }}><div style={{ textAlign: "center" }}><div style={{ fontSize: 16, marginBottom: 12 }}>Account not found</div><button onClick={() => setAuth(null)} style={{ padding: "9px 18px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{t.signOut}</button></div></div>;
-    const aDocs = getAssignedDocs(docs, empSelfViewView.id); const sp = docPct(empSelfViewView.docChecks, aDocs);
-    const showPick = empSelfViewView.trackPickRate !== false;
-    const last = empSelfViewView.pickHistory[empSelfViewView.pickHistory.length - 1]; const lPick = last ? last.rate : null; const lWk = last ? last.wk : null; const lTgt = lWk ? getTarget(lWk) : 60;
-    const tr = empSelfViewView.pickHistory.length >= 2 ? empSelfViewView.pickHistory[empSelfViewView.pickHistory.length - 1].rate - empSelfViewView.pickHistory[empSelfViewView.pickHistory.length - 2].rate : 0;
+    if (!empSelfView) return <div style={{ minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", color: C.textMuted, fontFamily: "'DM Sans', sans-serif" }}><div style={{ textAlign: "center" }}><div style={{ fontSize: 16, marginBottom: 12 }}>Account not found</div><button onClick={() => setAuth(null)} style={{ padding: "9px 18px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{t.signOut}</button></div></div>;
+    const aDocs = getAssignedDocs(docs, empSelfView.id); const sp = docPct(empSelfView.docChecks, aDocs);
+    const showPick = empSelfView.trackPickRate !== false;
+    const last = empSelfView.pickHistory[empSelfView.pickHistory.length - 1]; const lPick = last ? last.rate : null; const lWk = last ? last.wk : null; const lTgt = lWk ? getTarget(lWk) : 60;
+    const tr = empSelfView.pickHistory.length >= 2 ? empSelfView.pickHistory[empSelfView.pickHistory.length - 1].rate - empSelfView.pickHistory[empSelfView.pickHistory.length - 2].rate : 0;
     return (
       <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'DM Sans', 'Segoe UI', sans-serif" }}>
         <div style={{ borderBottom: `1px solid ${C.border}`, padding: "14px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", background: C.surface, flexWrap: "wrap", gap: 8 }}>
