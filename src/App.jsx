@@ -146,7 +146,7 @@ function downloadCert(docName, chk) {
 function exportXLS(emps, docs, t) {
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(emps.map(emp => { const ad = getAssignedDocs(docs, emp.id); const last = emp.pickHistory[emp.pickHistory.length-1]; return { Employee:emp.name, Role:emp.role, Start:emp.startDate||"", "Pick Rate":last?last.rate:"N/A", Target:last?getTarget(last.wk):"N/A", "Meets Target":last?(last.rate>=getTarget(last.wk)?"Yes":"No"):"N/A", "Doc %":docPct(emp.docChecks,ad)+"%", Done:`${ad.filter(d=>emp.docChecks[d.id]).length}/${ad.length}` }; })), "Overview");
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(emps.map(emp => { const row = { Employee:emp.name }; docs.forEach(d => { const a = d.assignedTo?.includes("all")||d.assignedTo?.includes(emp.id); if(!a)row[d.name]="Not Assigned"; else if(emp.docChecks[d.id]){const c=emp.docChecks[d.id];row[d.name]=c.sig?`Signed: ${c.typedName||c.signedBy} ${c.dateTime||c.date}`:`Reviewed ${c.dateTime||c.date}`;} else row[d.name]="INCOMPLETE"; }); return row; })), "Document Status");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(emps.map(emp => { const row = { Employee:emp.name }; docs.forEach(d => { const a = d.assignedTo?.includes("all")||d.assignedTo?.includes(emp.id); if(!a)row[d.name]="Not Assigned"; else if(emp.docChecks[d.id]){const c=emp.docChecks[d.id]; if(c.status==="signed") row[d.name]=`SIGNED - Confirmed ${c.signedConfirmedAt||c.dateTime||c.date}`; else if(c.status==="opened") row[d.name]=`OPENED ${c.dateTime||c.date} - Awaiting signature`; else row[d.name]=`Reviewed ${c.dateTime||c.date}`;} else row[d.name]="INCOMPLETE"; }); return row; })), "Document Status");
   const pr=[]; emps.forEach(e=>e.pickHistory.forEach(p=>pr.push({Employee:e.name,Week:p.wk,Date:p.date,Rate:p.rate,Target:getTarget(p.wk),Met:p.rate>=getTarget(p.wk)?"Yes":"No"}))); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(pr.length?pr:[{Note:"No data"}]), "Pick Rates");
   XLSX.writeFile(wb, `PeopleTrack_${todayDate()}.xlsx`);
 }
@@ -305,6 +305,20 @@ export default function App() {
     await saveEmp({ ...emp, docChecks: { ...emp.docChecks, [docId]: { date: todayDate(), dateTime: nowDateTime(), sig: sigData, signedBy: emp.name, typedName } } });
     setSigDocId(null);
   };
+  // Contract: employee opens Adobe link → auto-mark as "opened"
+  const openContractLink = async (empId, docId, url) => {
+    const emp = emps.find(e => e.id === empId); if (!emp) return;
+    if (!emp.docChecks[docId]) {
+      await saveEmp({ ...emp, docChecks: { ...emp.docChecks, [docId]: { date: todayDate(), dateTime: nowDateTime(), sig: null, signedBy: emp.name, status: "opened" } } });
+    }
+    window.open(url, "_blank");
+  };
+  // Manager marks contract as signed (after confirming in Adobe)
+  const markContractSigned = async (empId, docId) => {
+    const emp = emps.find(e => e.id === empId); if (!emp) return;
+    const existing = emp.docChecks[docId] || {};
+    await saveEmp({ ...emp, docChecks: { ...emp.docChecks, [docId]: { ...existing, date: existing.date || todayDate(), dateTime: existing.dateTime || nowDateTime(), signedBy: existing.signedBy || emp.name, status: "signed", signedConfirmedAt: nowDateTime() } } });
+  };
 
   const nb = a => ({ padding: "9px 16px", borderRadius: 8, border: "none", background: a ? C.accentSoft : "transparent", color: a ? C.accent : C.textMuted, fontWeight: 600, fontSize: 13, cursor: "pointer" });
   const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: 24 };
@@ -312,38 +326,54 @@ export default function App() {
   const lbl = { display: "block", fontSize: 11, color: C.textMuted, marginBottom: 5, textTransform: "uppercase", letterSpacing: 0.8, fontWeight: 600 };
 
   const EmpDocItem = ({ doc, emp, isMgr }) => {
-    const chk = emp.docChecks[doc.id]; const done = !!chk; const isSig = sigDocId === doc.id;
+    const chk = emp.docChecks[doc.id]; const done = !!chk;
     const isContract = doc.type === "contract";
     const [confirmCheck, setConfirmCheck] = useState(false);
+    const contractStatus = chk?.status; // "opened" or "signed"
+    const isOpened = contractStatus === "opened";
+    const isSigned = contractStatus === "signed";
+    // For contracts: done means at least opened. For SOPs: done means reviewed.
+    const fullyDone = isContract ? isSigned : done;
+    const bgColor = fullyDone ? C.greenSoft : (isOpened ? C.amberSoft : C.surfaceAlt);
+    const borderColor = fullyDone ? "rgba(34,197,94,0.18)" : (isOpened ? "rgba(234,179,8,0.18)" : C.border);
     return (
-      <div style={{ padding: "12px 14px", borderRadius: 10, background: done ? C.greenSoft : C.surfaceAlt, border: `1px solid ${done ? "rgba(34,197,94,0.18)" : C.border}`, marginBottom: 6 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: (isSig || confirmCheck) ? 12 : 0, flexWrap: "wrap", gap: 6 }}>
+      <div style={{ padding: "12px 14px", borderRadius: 10, background: bgColor, border: `1px solid ${borderColor}`, marginBottom: 6 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: confirmCheck ? 12 : 0, flexWrap: "wrap", gap: 6 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0 }}>
-            <span style={{ fontSize: 16, flexShrink: 0 }}>{done ? "✅" : isContract ? "📝" : "📄"}</span>
+            <span style={{ fontSize: 16, flexShrink: 0 }}>{isSigned ? "✅" : isOpened ? "📨" : isContract ? "📝" : done ? "✅" : "📄"}</span>
             <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: done ? C.green : C.text }}>{doc.name}</div>
-              {done && <div style={{ fontSize: 10, color: C.textMuted, fontFamily: "'JetBrains Mono', monospace", marginTop: 2 }}>
-                {chk.sig ? <>✍️ {chk.typedName || chk.signedBy} · {chk.dateTime || chk.date}</> : <>{t.reviewedAt} {chk.dateTime || chk.date}</>}
+              <div style={{ fontSize: 13, fontWeight: 600, color: fullyDone ? C.green : (isOpened ? C.amber : C.text) }}>{doc.name}</div>
+              {isContract && chk && <div style={{ fontSize: 10, color: C.textMuted, fontFamily: "'JetBrains Mono', monospace", marginTop: 2 }}>
+                {isSigned ? <>✅ {t.signed} · {t.confirmedAt || "Confirmed"} {chk.signedConfirmedAt || chk.dateTime}</> :
+                 isOpened ? <>📨 {t.opened || "Opened"} {chk.dateTime} · {t.awaitingSignature || "Awaiting signature"}</> : null}
+              </div>}
+              {!isContract && done && <div style={{ fontSize: 10, color: C.textMuted, fontFamily: "'JetBrains Mono', monospace", marginTop: 2 }}>
+                {t.reviewedAt} {chk.dateTime || chk.date}
               </div>}
             </div>
           </div>
           <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-            {doc.url && <a href={doc.url} target="_blank" rel="noopener noreferrer" style={{ padding: "5px 10px", borderRadius: 6, border: `1px solid ${C.border}`, color: C.accent, fontWeight: 600, fontSize: 11, textDecoration: "none" }}>{t.viewDoc}</a>}
-            {!done && !isSig && !confirmCheck && isContract && !isMgr && <button onClick={() => setSigDocId(doc.id)} style={{ padding: "5px 12px", borderRadius: 6, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 11, cursor: "pointer" }}>{t.reviewSign}</button>}
-            {!done && !confirmCheck && !isContract && !isMgr && <button onClick={() => setConfirmCheck(true)} style={{ padding: "5px 12px", borderRadius: 6, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 11, cursor: "pointer" }}>{t.markReviewed}</button>}
-            {done && chk.sig && <button onClick={() => setViewSig(chk.sig)} style={{ padding: "5px 10px", borderRadius: 6, border: `1px solid ${C.border}`, background: "transparent", color: C.textMuted, fontWeight: 600, fontSize: 11, cursor: "pointer" }}>{t.viewSig}</button>}
-            {done && chk.sig && isMgr && <button onClick={() => downloadCert(doc.name, chk)} style={{ padding: "5px 10px", borderRadius: 6, border: `1px solid ${C.border}`, background: "transparent", color: C.green, fontWeight: 600, fontSize: 11, cursor: "pointer" }}>{t.downloadCert}</button>}
+            {/* SOP: View Doc link (no auto-tracking) */}
+            {!isContract && doc.url && <a href={doc.url} target="_blank" rel="noopener noreferrer" style={{ padding: "5px 10px", borderRadius: 6, border: `1px solid ${C.border}`, color: C.accent, fontWeight: 600, fontSize: 11, textDecoration: "none" }}>{t.viewDoc}</a>}
+            {/* Contract: Open Document button (auto-marks as opened for employees) */}
+            {isContract && doc.url && !isMgr && <button onClick={() => openContractLink(emp.id, doc.id, doc.url)} style={{ padding: "5px 12px", borderRadius: 6, border: `1px solid ${C.border}`, background: "transparent", color: C.accent, fontWeight: 600, fontSize: 11, cursor: "pointer" }}>{t.openDocument || "Open Document"}</button>}
+            {/* Contract: Manager view doc link */}
+            {isContract && doc.url && isMgr && <a href={doc.url} target="_blank" rel="noopener noreferrer" style={{ padding: "5px 10px", borderRadius: 6, border: `1px solid ${C.border}`, color: C.accent, fontWeight: 600, fontSize: 11, textDecoration: "none" }}>{t.viewDoc}</a>}
+            {/* Contract: Manager can mark as signed once opened */}
+            {isContract && isOpened && isMgr && <button onClick={() => markContractSigned(emp.id, doc.id)} style={{ padding: "5px 12px", borderRadius: 6, border: "none", background: C.green, color: "#fff", fontWeight: 600, fontSize: 11, cursor: "pointer" }}>{t.markSigned || "Mark as Signed"}</button>}
+            {/* SOP: Mark as reviewed button for employees */}
+            {!isContract && !done && !confirmCheck && !isMgr && <button onClick={() => setConfirmCheck(true)} style={{ padding: "5px 12px", borderRadius: 6, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 11, cursor: "pointer" }}>{t.markReviewed}</button>}
+            {/* Contract: Not opened yet - employee prompt */}
+            {isContract && !chk && !isMgr && !doc.url && <span style={{ fontSize: 11, color: C.textDim }}>{t.noLink || "No link added"}</span>}
           </div>
         </div>
+        {/* SOP checkbox confirmation */}
         {confirmCheck && !done && (<div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
           <label onClick={() => { reviewSOP(emp.id, doc.id); setConfirmCheck(false); }} style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer" }}>
             <div style={{ width: 22, height: 22, borderRadius: 6, border: `2px solid ${C.accent}`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 1 }}><svg width="14" height="14" viewBox="0 0 14 14" fill="none" opacity={0.3}><path d="M3 7L6 10L11 4" stroke={C.accent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg></div>
             <div><div style={{ fontSize: 13, fontWeight: 600 }}>{t.confirmReview}</div><div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>{doc.name}</div></div>
           </label>
           <div style={{ textAlign: "right", marginTop: 8 }}><button onClick={() => setConfirmCheck(false)} style={{ padding: "6px 14px", borderRadius: 6, border: `1px solid ${C.border}`, background: "transparent", color: C.textMuted, fontWeight: 600, fontSize: 11, cursor: "pointer" }}>{t.cancel}</button></div>
-        </div>)}
-        {isSig && isContract && !isMgr && (<div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
-          <ContractSignFlow doc={doc} emp={emp} lang={lang} t={t} onSign={(sig, name) => signContract(emp.id, doc.id, sig, name)} onCancel={() => setSigDocId(null)} />
         </div>)}
       </div>
     );
@@ -464,7 +494,7 @@ export default function App() {
             <div><h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>{t.documents}</h2><p style={{ color: C.textMuted, fontSize: 13 }}>{t.docManageDesc}</p></div>
             <button onClick={() => setShowAD(true)} style={{ padding: "9px 18px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{t.addDocument}</button>
           </div>
-          {["sop", "contract"].map(type => { const td = docs.filter(d => d.type === type); if (!td.length) return null; return (<div key={type} style={{ marginBottom: 24 }}><div style={{ ...lbl, marginBottom: 10, fontSize: 12 }}>{type === "sop" ? t.sops : t.contracts}</div><div style={{ display: "flex", flexDirection: "column", gap: 6 }}>{td.map(doc => { const aEmps = emps.filter(e => doc.assignedTo?.includes("all") || doc.assignedTo?.includes(e.id)); const sc = aEmps.filter(e => e.docChecks[doc.id]).length; return (<div key={doc.id} style={{ ...card, padding: "14px 18px" }}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}><div style={{ flex: 1, minWidth: 200 }}><div style={{ fontWeight: 600, fontSize: 14 }}>{doc.type === "contract" ? "📝" : "📄"} {doc.name}</div><div style={{ fontSize: 11, color: C.textMuted, marginTop: 3 }}>{sc}/{aEmps.length} {doc.type === "contract" ? t.signed : t.reviewed}{doc.contractText ? " · 📋" : ""}{doc.url && <> · <a href={doc.url} target="_blank" rel="noopener noreferrer" style={{ color: C.accent, textDecoration: "none" }}>{t.viewDoc}↗</a></>}</div></div><div style={{ display: "flex", gap: 6 }}><button onClick={() => setShowAssign(doc.id)} style={{ padding: "5px 12px", borderRadius: 6, border: `1px solid ${C.border}`, background: "transparent", color: C.accent, fontWeight: 600, fontSize: 11, cursor: "pointer" }}>{t.assignDocs}</button><button onClick={() => { if (window.confirm(`${t.remove} "${doc.name}"?`)) remD(doc.id); }} style={{ background: C.redSoft, border: "none", color: C.red, padding: "5px 12px", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>{t.remove}</button></div></div><div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 6 }}>{aEmps.map(emp => { const chk = emp.docChecks[doc.id]; return (<div key={emp.id} style={{ padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 600, background: chk ? C.greenSoft : C.redSoft, color: chk ? C.green : C.red, cursor: chk?.sig ? "pointer" : "default" }} onClick={() => chk?.sig && setViewSig(chk.sig)}>{emp.name.split(" ")[0]} {chk ? "✓" : "✗"}</div>); })}</div></div>); })}</div></div>); })}
+          {["sop", "contract"].map(type => { const td = docs.filter(d => d.type === type); if (!td.length) return null; return (<div key={type} style={{ marginBottom: 24 }}><div style={{ ...lbl, marginBottom: 10, fontSize: 12 }}>{type === "sop" ? t.sops : t.contracts}</div><div style={{ display: "flex", flexDirection: "column", gap: 6 }}>{td.map(doc => { const aEmps = emps.filter(e => doc.assignedTo?.includes("all") || doc.assignedTo?.includes(e.id)); const sc = aEmps.filter(e => e.docChecks[doc.id]).length; return (<div key={doc.id} style={{ ...card, padding: "14px 18px" }}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}><div style={{ flex: 1, minWidth: 200 }}><div style={{ fontWeight: 600, fontSize: 14 }}>{doc.type === "contract" ? "📝" : "📄"} {doc.name}</div><div style={{ fontSize: 11, color: C.textMuted, marginTop: 3 }}>{sc}/{aEmps.length} {doc.type === "contract" ? t.signed : t.reviewed}{doc.contractText ? " · 📋" : ""}{doc.url && <> · <a href={doc.url} target="_blank" rel="noopener noreferrer" style={{ color: C.accent, textDecoration: "none" }}>{t.viewDoc}↗</a></>}</div></div><div style={{ display: "flex", gap: 6 }}><button onClick={() => setShowAssign(doc.id)} style={{ padding: "5px 12px", borderRadius: 6, border: `1px solid ${C.border}`, background: "transparent", color: C.accent, fontWeight: 600, fontSize: 11, cursor: "pointer" }}>{t.assignDocs}</button><button onClick={() => { if (window.confirm(`${t.remove} "${doc.name}"?`)) remD(doc.id); }} style={{ background: C.redSoft, border: "none", color: C.red, padding: "5px 12px", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>{t.remove}</button></div></div><div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 6 }}>{aEmps.map(emp => { const chk = emp.docChecks[doc.id]; const st = chk?.status; const isSigned = st === "signed"; const isOpened = st === "opened"; const chipBg = isSigned ? C.greenSoft : (isOpened ? C.amberSoft : (chk ? C.greenSoft : C.redSoft)); const chipColor = isSigned ? C.green : (isOpened ? C.amber : (chk ? C.green : C.red)); const chipIcon = isSigned ? "✓" : (isOpened ? "◎" : (chk ? "✓" : "✗")); return (<div key={emp.id} style={{ padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 600, background: chipBg, color: chipColor }}>{emp.name.split(" ")[0]} {chipIcon}</div>); })}</div></div>); })}</div></div>); })}
           {showAssign && (() => { const doc = docs.find(d => d.id === showAssign); if (!doc) return null; const isAll = doc.assignedTo?.includes("all"); return (<Modal onClose={() => setShowAssign(null)}><h3 style={{ fontSize: 17, fontWeight: 700, marginBottom: 6 }}>{t.assignDocs}</h3><div style={{ color: C.textMuted, fontSize: 13, marginBottom: 18 }}>{doc.name}</div><div style={{ marginBottom: 12 }}><label onClick={() => toggleAssign(doc.id, "all")} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: 8, background: isAll ? C.accentSoft : C.surfaceAlt, border: `1px solid ${isAll ? C.accent : C.border}`, cursor: "pointer", marginBottom: 8 }}><div style={{ width: 20, height: 20, borderRadius: 5, border: `2px solid ${isAll ? C.accent : C.textDim}`, background: isAll ? C.accent : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{isAll && <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6L5 8.5L9.5 3.5" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>}</div><span style={{ fontWeight: 600, fontSize: 13, color: isAll ? C.accent : C.text }}>{t.allEmployees}</span></label>{!isAll && emps.map(emp => { const assigned = doc.assignedTo?.includes(emp.id); return (<label key={emp.id} onClick={() => toggleAssign(doc.id, emp.id)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderRadius: 8, background: assigned ? C.greenSoft : C.surfaceAlt, border: `1px solid ${assigned ? "rgba(34,197,94,0.18)" : C.border}`, cursor: "pointer", marginBottom: 5 }}><div style={{ width: 20, height: 20, borderRadius: 5, border: `2px solid ${assigned ? C.green : C.textDim}`, background: assigned ? C.green : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{assigned && <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6L5 8.5L9.5 3.5" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>}</div><div><div style={{ fontWeight: 600, fontSize: 13 }}>{emp.name}</div><div style={{ fontSize: 11, color: C.textMuted }}>{emp.role}</div></div></label>); })}</div><div style={{ textAlign: "right" }}><button onClick={() => setShowAssign(null)} style={{ padding: "9px 18px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{t.close}</button></div></Modal>); })()}
           {showAD && <Modal onClose={() => setShowAD(false)} wide={nDT === "contract"}><h3 style={{ fontSize: 17, fontWeight: 700, marginBottom: 18 }}>{t.addDocument}</h3>
             <div style={{ marginBottom: 12 }}><label style={lbl}>{t.docName}</label><input value={nDN} onChange={e => sNDN(e.target.value)} placeholder="e.g. Employment Contract" style={inp} /></div>
