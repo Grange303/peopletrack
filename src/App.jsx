@@ -189,6 +189,109 @@ function downloadCert(docName, chk) {
   document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
 }
 
+// Download onboarding document audit certificate
+function downloadOnboardingCert(doc, sub, empName) {
+  const body = doc.body;
+  let answersHtml = "";
+
+  if (doc.kind === "acknowledge") {
+    answersHtml = `<div class="f"><div class="fl">Type</div><div class="fv">Read &amp; Acknowledge</div></div>`;
+    (body.sections || []).forEach(sec => {
+      answersHtml += `<div class="sec"><div class="sec-t">${sec.title}</div><div class="sec-c">${sec.content}</div></div>`;
+    });
+    answersHtml += `<div class="f"><div class="fl">Employee acknowledged all sections</div><div class="fv">✓ Confirmed</div></div>`;
+  } else if (doc.kind === "checklist") {
+    answersHtml = `<div class="f"><div class="fl">Type</div><div class="fv">Training Checklist</div></div>`;
+    const items = body.items || [];
+    const ticked = sub.answers?.items || {};
+    const tickedCount = items.filter(it => ticked[it.id]).length;
+    answersHtml += `<div class="f"><div class="fl">Completion</div><div class="fv">${tickedCount} / ${items.length} items confirmed</div></div>`;
+    answersHtml += `<table class="tbl"><thead><tr><th>Item</th><th>Status</th></tr></thead><tbody>`;
+    items.forEach(it => {
+      const done = !!ticked[it.id];
+      answersHtml += `<tr><td>${it.text}</td><td style="color:${done ? '#16a34a' : '#dc2626'};font-weight:700">${done ? '✓ Completed' : '✗ Not completed'}</td></tr>`;
+    });
+    answersHtml += `</tbody></table>`;
+  } else if (doc.kind === "questionnaire") {
+    answersHtml = `<div class="f"><div class="fl">Type</div><div class="fv">Health / Safety Questionnaire</div></div>`;
+    const questions = body.questions || [];
+    const hasFlags = (sub.flag_reasons || []).length > 0;
+    if (hasFlags) {
+      answersHtml += `<div class="flag"><strong>⚠ FLAGGED ANSWERS (${sub.flag_reasons.length})</strong><br/>`;
+      sub.flag_reasons.forEach(f => { answersHtml += `• ${f.question} — answered <strong>${f.answer}</strong><br/>`; });
+      answersHtml += `</div>`;
+    }
+    answersHtml += `<table class="tbl"><thead><tr><th>Question</th><th>Answer</th><th>Flagged</th></tr></thead><tbody>`;
+    questions.forEach(q => {
+      const val = sub.answers?.[q.id]?.value || "—";
+      const flagged = q.flag_on && val === q.flag_on;
+      answersHtml += `<tr style="${flagged ? 'background:#fef2f2' : ''}"><td>${q.text}</td><td style="font-weight:700;color:${val === 'yes' ? '#b91c1c' : '#16a34a'}">${val.toUpperCase()}</td><td>${flagged ? '⚠ YES' : '—'}</td></tr>`;
+    });
+    answersHtml += `</tbody></table>`;
+  }
+
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Onboarding Certificate - ${doc.title}</title>
+<style>
+body{font-family:'Segoe UI',Arial,sans-serif;max-width:750px;margin:40px auto;padding:40px;color:#222;line-height:1.6}
+h1{font-size:22px;border-bottom:2px solid #2563eb;padding-bottom:12px;color:#1e40af;margin-bottom:20px}
+h2{font-size:16px;color:#555;margin-top:30px;margin-bottom:10px}
+.f{margin:10px 0;padding:12px 16px;background:#f8f9fa;border-radius:8px;border:1px solid #e5e7eb}
+.fl{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:4px}
+.fv{font-size:15px;font-weight:600;color:#222}
+.sec{margin:10px 0;padding:12px 16px;background:#fff;border:1px solid #e5e7eb;border-radius:8px}
+.sec-t{font-weight:700;font-size:14px;margin-bottom:4px;color:#1e40af}
+.sec-c{font-size:13px;color:#555}
+.flag{margin:16px 0;padding:14px 16px;background:#fef2f2;border:2px solid #fca5a5;border-radius:8px;font-size:13px;color:#991b1b}
+.tbl{width:100%;border-collapse:collapse;margin:12px 0;font-size:13px}
+.tbl th{text-align:left;padding:8px 10px;background:#f1f5f9;border:1px solid #e2e8f0;font-size:11px;text-transform:uppercase;color:#64748b}
+.tbl td{padding:8px 10px;border:1px solid #e2e8f0}
+.sb{margin-top:16px;padding:20px;border:1px solid #d1d5db;border-radius:8px;text-align:center;background:#fafafa}
+.sb img{max-width:300px;height:auto}
+.decl{margin:16px 0;padding:14px 16px;background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;font-size:13px;color:#92400e}
+.ft{margin-top:40px;padding-top:16px;border-top:1px solid #e5e7eb;font-size:11px;color:#999;text-align:center}
+.row{display:flex;gap:20px;margin-top:20px}
+.row>div{flex:1}
+@media print{body{margin:20px;padding:20px}}
+</style></head><body>
+<h1>Onboarding Document — Audit Record</h1>
+
+<div class="f"><div class="fl">Document</div><div class="fv">${doc.title}</div></div>
+<div class="f"><div class="fl">Employee</div><div class="fv">${empName}</div></div>
+<div class="f"><div class="fl">Submitted</div><div class="fv">${sub.submitted_at ? new Date(sub.submitted_at).toLocaleString() : "N/A"}</div></div>
+<div class="f"><div class="fl">Status</div><div class="fv" style="color:${sub.status==='approved'?'#16a34a':sub.status==='rejected'?'#dc2626':'#d97706'}">${(sub.status || "pending").toUpperCase()}</div></div>
+${sub.reviewed_at ? `<div class="f"><div class="fl">Reviewed</div><div class="fv">${new Date(sub.reviewed_at).toLocaleString()}</div></div>` : ""}
+${sub.manager_notes ? `<div class="f"><div class="fl">Manager Notes</div><div class="fv">${sub.manager_notes}</div></div>` : ""}
+
+<h2>Document Content &amp; Answers</h2>
+${answersHtml}
+
+<div class="decl"><strong>Employee Declaration:</strong><br/>
+"I, ${empName}, confirm that I have read, understood, and completed this document truthfully."</div>
+
+<div class="row">
+<div>
+<h2>Employee Signature</h2>
+<div class="sb">${sub.signature_png ? `<img src="${sub.signature_png}" alt="Employee Signature"/>` : '<p style="color:#999">No signature on file</p>'}</div>
+<div style="font-size:11px;color:#888;margin-top:6px;text-align:center">${empName} · ${sub.submitted_at ? new Date(sub.submitted_at).toLocaleString() : ""}</div>
+</div>
+<div>
+<h2>Manager Countersignature</h2>
+<div class="sb">${sub.manager_signature_png ? `<img src="${sub.manager_signature_png}" alt="Manager Signature"/>` : '<p style="color:#999">No countersignature on file</p>'}</div>
+<div style="font-size:11px;color:#888;margin-top:6px;text-align:center">${sub.reviewed_at ? `Reviewed ${new Date(sub.reviewed_at).toLocaleString()}` : ""}</div>
+</div>
+</div>
+
+<div class="ft">Generated by PeopleTrack · This document is an audit record of an onboarding submission within the PeopleTrack system.<br/>Document ID: ${doc.id} · Submission ID: ${sub.id}</div>
+</body></html>`;
+
+  const blob = new Blob([html], { type: "text/html" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `Onboarding_${doc.title.replace(/[^a-zA-Z0-9]/g, "_")}_${empName.replace(/\s+/g, "_")}_${todayDate()}.html`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+
 function exportXLS(emps, docs, t) {
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(emps.map(emp => { const ad = getAssignedDocs(docs, emp.id); const last = emp.pickHistory[emp.pickHistory.length-1]; return { Employee:emp.name, Role:emp.role, Start:emp.startDate||"", "Pick Rate":last?last.rate:"N/A", Target:last?getTarget(last.wk):"N/A", "Meets Target":last?(last.rate>=getTarget(last.wk)?"Yes":"No"):"N/A", "Doc %":docPct(emp.docChecks,ad)+"%", Done:`${ad.filter(d=>emp.docChecks[d.id]).length}/${ad.length}` }; })), "Overview");
@@ -890,7 +993,10 @@ export default function App() {
                           const st = sub?.status;
                           const icon = st === "approved" ? "✅" : st === "flagged" ? "⚠️" : st === "submitted" ? "📨" : st === "rejected" ? "❌" : "⬜";
                           const bgCol = st === "approved" ? C.greenSoft : st === "flagged" ? C.redSoft : st === "submitted" ? C.amberSoft : "transparent";
-                          return <td key={d.id} style={{ textAlign: "center", padding: "8px", fontSize: 16, background: bgCol }}>{icon}</td>;
+                          return <td key={d.id} style={{ textAlign: "center", padding: "6px", fontSize: 16, background: bgCol, verticalAlign: "middle" }}>
+                            <div>{icon}</div>
+                            {sub && (st === "approved" || st === "submitted" || st === "flagged") && <button onClick={(e) => { e.stopPropagation(); downloadOnboardingCert(d, sub, emp.name); }} style={{ marginTop: 2, padding: "2px 6px", borderRadius: 4, border: `1px solid ${C.border}`, background: "transparent", color: C.accent, fontWeight: 600, fontSize: 9, cursor: "pointer" }}>📥</button>}
+                          </td>;
                         })}
                         <td style={{ textAlign: "center", padding: "10px 14px" }}>
                           <div style={{ display: "flex", alignItems: "center", gap: 6, justifyContent: "center" }}>
