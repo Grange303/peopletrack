@@ -11,6 +11,7 @@ function useEmployees() {
     const { data } = await supabase.from("employees").select("*");
     if (data) setEmps(data.map(e => ({
       id: e.id, name: e.name, role: e.role, pin: e.pin, username: e.username || "",
+      accountType: e.account_type || "employee",
       startDate: e.start_date, pickHistory: e.pick_history || [],
       docChecks: e.doc_checks || {}, notes: e.notes || "", privateNotes: e.private_notes || "",
       trackPickRate: e.track_pick_rate !== false
@@ -23,6 +24,7 @@ function useEmployees() {
   const saveEmp = useCallback(async (emp) => {
     await supabase.from("employees").upsert({
       id: emp.id, name: emp.name, role: emp.role, pin: emp.pin, username: emp.username || "",
+      account_type: emp.accountType || "employee",
       start_date: emp.startDate, pick_history: emp.pickHistory,
       doc_checks: emp.docChecks, notes: emp.notes, private_notes: emp.privateNotes,
       track_pick_rate: emp.trackPickRate !== false
@@ -44,6 +46,7 @@ function useEmployees() {
       if (!old || JSON.stringify(old) !== JSON.stringify(emp)) {
         supabase.from("employees").upsert({
           id: emp.id, name: emp.name, role: emp.role, pin: emp.pin, username: emp.username || "",
+          account_type: emp.accountType || "employee",
           start_date: emp.startDate, pick_history: emp.pickHistory,
           doc_checks: emp.docChecks, notes: emp.notes, private_notes: emp.privateNotes,
           track_pick_rate: emp.trackPickRate !== false
@@ -588,18 +591,16 @@ export default function App() {
     setLErr("");
     const trimUser = loginUser.trim().toLowerCase();
     if (!trimUser || !pin) { setLErr(t.pinError); return; }
-    // Check employees (includes managers and supervisors stored in employees table)
     const e = emps.find(e => (e.username || "").toLowerCase() === trimUser && e.pin === pin);
     if (e) {
-      // role can be "manager", "supervisor", or "employee"
-      setAuth({ role: e.role || "employee", id: e.id });
+      setAuth({ role: e.accountType || "employee", id: e.id });
       setPin(""); setLoginUser(""); return;
     }
     setLErr(t.pinError);
   };
   const isManager = auth?.role === "manager";
   const isSupervisor = auth?.role === "supervisor";
-  const isAdmin = isManager || isSupervisor; // both see the manager-style dashboard
+  const isAdmin = isManager || isSupervisor;
 
   const updE = useCallback((id, updates) => {
     setEmps(prev => {
@@ -612,7 +613,7 @@ export default function App() {
 
   const addE = async () => {
     if (!nN.trim() || !nP.trim()) return;
-    const emp = { id: "e" + Date.now(), name: nN.trim(), role: nR.trim() || "Team Member", pin: nP.trim(), username: nUN.trim().toLowerCase(), startDate: nSD, pickHistory: [], docChecks: {}, notes: "", privateNotes: "", trackPickRate: nTP };
+    const emp = { id: "e" + Date.now(), name: nN.trim(), role: nR.trim() || "Team Member", pin: nP.trim(), username: nUN.trim().toLowerCase(), accountType: nRole, startDate: nSD, pickHistory: [], docChecks: {}, notes: "", privateNotes: "", trackPickRate: nTP };
     await saveEmp(emp); sNN(""); sNR(""); sNP(""); sNSD(todayDate()); sNTP(true); sNUN(""); sNRole("employee"); setShowAE(false);
   };
   const remE = async (id) => { await deleteEmp(id); if (selId === id) { setSelId(null); setView("employees"); } };
