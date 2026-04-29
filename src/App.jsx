@@ -10,7 +10,7 @@ function useEmployees() {
   const fetchEmps = useCallback(async () => {
     const { data } = await supabase.from("employees").select("*");
     if (data) setEmps(data.map(e => ({
-      id: e.id, name: e.name, role: e.role, pin: e.pin,
+      id: e.id, name: e.name, role: e.role, pin: e.pin, username: e.username || "",
       startDate: e.start_date, pickHistory: e.pick_history || [],
       docChecks: e.doc_checks || {}, notes: e.notes || "", privateNotes: e.private_notes || "",
       trackPickRate: e.track_pick_rate !== false
@@ -22,7 +22,7 @@ function useEmployees() {
 
   const saveEmp = useCallback(async (emp) => {
     await supabase.from("employees").upsert({
-      id: emp.id, name: emp.name, role: emp.role, pin: emp.pin,
+      id: emp.id, name: emp.name, role: emp.role, pin: emp.pin, username: emp.username || "",
       start_date: emp.startDate, pick_history: emp.pickHistory,
       doc_checks: emp.docChecks, notes: emp.notes, private_notes: emp.privateNotes,
       track_pick_rate: emp.trackPickRate !== false
@@ -43,7 +43,7 @@ function useEmployees() {
       const old = emps.find(e => e.id === emp.id);
       if (!old || JSON.stringify(old) !== JSON.stringify(emp)) {
         supabase.from("employees").upsert({
-          id: emp.id, name: emp.name, role: emp.role, pin: emp.pin,
+          id: emp.id, name: emp.name, role: emp.role, pin: emp.pin, username: emp.username || "",
           start_date: emp.startDate, pick_history: emp.pickHistory,
           doc_checks: emp.docChecks, notes: emp.notes, private_notes: emp.privateNotes,
           track_pick_rate: emp.trackPickRate !== false
@@ -562,11 +562,11 @@ export default function App() {
   const [lang, setLang] = useLang();
 
   const [auth, setAuth] = useState(null);
-  const [pin, setPin] = useState(""); const [lErr, setLErr] = useState("");
+  const [pin, setPin] = useState(""); const [loginUser, setLoginUser] = useState(""); const [lErr, setLErr] = useState("");
   const [view, setView] = useState("dashboard"); const [selId, setSelId] = useState(null);
   const [search, setSearch] = useState(""); const [sigDocId, setSigDocId] = useState(null); const [viewSig, setViewSig] = useState(null);
   const [showAE, setShowAE] = useState(false); const [showAD, setShowAD] = useState(false); const [showAP, setShowAP] = useState(false); const [showAssign, setShowAssign] = useState(null);
-  const [nN, sNN] = useState(""); const [nR, sNR] = useState(""); const [nP, sNP] = useState(""); const [nSD, sNSD] = useState(todayDate()); const [nTP, sNTP] = useState(true);
+  const [nN, sNN] = useState(""); const [nR, sNR] = useState(""); const [nP, sNP] = useState(""); const [nSD, sNSD] = useState(todayDate()); const [nTP, sNTP] = useState(true); const [nUN, sNUN] = useState(""); const [nRole, sNRole] = useState("employee");
   const [nDN, sNDN] = useState(""); const [nDT, sNDT] = useState("sop"); const [nDU, sNDU] = useState(""); const [nDC, sNDC] = useState("");
   const [nPR, sNPR] = useState(""); const [nPD, sNPD] = useState(todayDate()); const [nPW, sNPW] = useState("");
   const [obOpenDocId, setObOpenDocId] = useState(null); const [obReviewId, setObReviewId] = useState(null);
@@ -582,8 +582,24 @@ export default function App() {
   const isEmp = auth?.role === "employee";
   const empSelf = isEmp ? emps.find(e => e.id === auth.id) : null;
   const sel = emps.find(e => e.id === selId);
+  const authUser = auth ? emps.find(e => e.id === auth.id) : null;
 
-  const login = () => { setLErr(""); if (pin === managerPin) { setAuth({ role: "manager" }); setPin(""); return; } const e = emps.find(e => e.pin === pin); if (e) { setAuth({ role: "employee", id: e.id }); setPin(""); return; } setLErr(t.pinError); };
+  const login = () => {
+    setLErr("");
+    const trimUser = loginUser.trim().toLowerCase();
+    if (!trimUser || !pin) { setLErr(t.pinError); return; }
+    // Check employees (includes managers and supervisors stored in employees table)
+    const e = emps.find(e => (e.username || "").toLowerCase() === trimUser && e.pin === pin);
+    if (e) {
+      // role can be "manager", "supervisor", or "employee"
+      setAuth({ role: e.role || "employee", id: e.id });
+      setPin(""); setLoginUser(""); return;
+    }
+    setLErr(t.pinError);
+  };
+  const isManager = auth?.role === "manager";
+  const isSupervisor = auth?.role === "supervisor";
+  const isAdmin = isManager || isSupervisor; // both see the manager-style dashboard
 
   const updE = useCallback((id, updates) => {
     setEmps(prev => {
@@ -596,8 +612,8 @@ export default function App() {
 
   const addE = async () => {
     if (!nN.trim() || !nP.trim()) return;
-    const emp = { id: "e" + Date.now(), name: nN.trim(), role: nR.trim() || "Team Member", pin: nP.trim(), startDate: nSD, pickHistory: [], docChecks: {}, notes: "", privateNotes: "", trackPickRate: nTP };
-    await saveEmp(emp); sNN(""); sNR(""); sNP(""); sNSD(todayDate()); sNTP(true); setShowAE(false);
+    const emp = { id: "e" + Date.now(), name: nN.trim(), role: nR.trim() || "Team Member", pin: nP.trim(), username: nUN.trim().toLowerCase(), startDate: nSD, pickHistory: [], docChecks: {}, notes: "", privateNotes: "", trackPickRate: nTP };
+    await saveEmp(emp); sNN(""); sNR(""); sNP(""); sNSD(todayDate()); sNTP(true); sNUN(""); sNRole("employee"); setShowAE(false);
   };
   const remE = async (id) => { await deleteEmp(id); if (selId === id) { setSelId(null); setView("employees"); } };
   const addD = async () => {
@@ -758,7 +774,8 @@ export default function App() {
         <div style={{ width: 56, height: 56, borderRadius: 16, background: `linear-gradient(135deg, ${C.accent}, ${C.purple})`, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 26, fontWeight: 700, color: "#fff", marginBottom: 18 }}>P</div>
         <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>{t.appName}</h1>
         <p style={{ color: C.textMuted, fontSize: 13, marginBottom: 28 }}>{t.pinPrompt}</p>
-        <input type="password" maxLength={8} value={pin} onChange={e => { setPin(e.target.value.replace(/\D/g, "")); setLErr(""); }} onKeyDown={e => e.key === "Enter" && login()} placeholder={t.pinPlaceholder} style={{ ...inp, textAlign: "center", fontSize: 22, letterSpacing: 8, fontFamily: "'JetBrains Mono', monospace", marginBottom: 16 }} autoFocus />
+        <input type="text" value={loginUser} onChange={e => { setLoginUser(e.target.value); setLErr(""); }} placeholder="Username" style={{ ...inp, textAlign: "center", fontSize: 15, marginBottom: 10, fontFamily: "'DM Sans', sans-serif" }} autoFocus autoComplete="username" />
+        <input type="password" maxLength={8} value={pin} onChange={e => { setPin(e.target.value.replace(/\D/g, "")); setLErr(""); }} onKeyDown={e => e.key === "Enter" && login()} placeholder={t.pinPlaceholder} style={{ ...inp, textAlign: "center", fontSize: 22, letterSpacing: 8, fontFamily: "'JetBrains Mono', monospace", marginBottom: 16 }} autoComplete="current-password" />
         {lErr && <div style={{ color: C.red, fontSize: 12, marginBottom: 12 }}>{lErr}</div>}
         <button onClick={login} style={{ width: "100%", padding: "12px", borderRadius: 10, border: "none", background: C.accent, color: "#fff", fontWeight: 700, fontSize: 14, cursor: "pointer", marginBottom: 20 }}>{t.signIn}</button>
         {emps.length === 0 && <div style={{ fontSize: 11, color: C.textDim, lineHeight: 1.6 }}>{t.manager} PIN: 0000<br/>Add employees in the manager dashboard</div>}
@@ -859,13 +876,13 @@ export default function App() {
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'DM Sans', 'Segoe UI', sans-serif", fontSize: 14, lineHeight: 1.55 }}>
       <div style={{ borderBottom: `1px solid ${C.border}`, padding: "14px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", background: C.surface, flexWrap: "wrap", gap: 8 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}><div style={{ width: 34, height: 34, borderRadius: 9, background: `linear-gradient(135deg, ${C.accent}, ${C.purple})`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, fontWeight: 700, color: "#fff" }}>P</div><div><div style={{ fontWeight: 700, fontSize: 15 }}>{t.appName}</div><div style={{ fontSize: 11, color: C.textMuted }}>{t.managerView}</div></div></div>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}><div style={{ width: 34, height: 34, borderRadius: 9, background: `linear-gradient(135deg, ${C.accent}, ${C.purple})`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, fontWeight: 700, color: "#fff" }}>P</div><div><div style={{ fontWeight: 700, fontSize: 15 }}>{t.appName}</div><div style={{ fontSize: 11, color: C.textMuted }}>{isManager ? t.managerView : "Supervisor View"}{authUser ? ` · ${authUser.name}` : ""}</div></div></div>
         <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
           <button style={nb(view === "dashboard")} onClick={() => setView("dashboard")}>{t.dashboard}</button>
           <button style={nb(view === "employees" || view === "detail")} onClick={() => setView("employees")}>{t.employees}</button>
-          <button style={nb(view === "documents")} onClick={() => setView("documents")}>{t.documents}</button>
+          {isManager && <button style={nb(view === "documents")} onClick={() => setView("documents")}>{t.documents}</button>}
           <button style={nb(view === "onboarding")} onClick={() => setView("onboarding")}>Onboarding</button>
-          <button onClick={() => exportXLS(emps, docs, t)} style={{ padding: "9px 16px", borderRadius: 8, border: "none", background: "rgba(34,197,94,0.15)", color: C.green, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>📊 {t.exportExcel}</button>
+          {isManager && <button onClick={() => exportXLS(emps, docs, t)} style={{ padding: "9px 16px", borderRadius: 8, border: "none", background: "rgba(34,197,94,0.15)", color: C.green, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>📊 {t.exportExcel}</button>}
           <div style={{ width: 1, height: 24, background: C.border, margin: "0 4px" }} /><LangSel lang={lang} setLang={setLang} />
           <button onClick={() => setAuth(null)} style={{ ...nb(false), color: C.red, fontSize: 12 }}>{t.signOut}</button>
         </div>
@@ -896,7 +913,7 @@ export default function App() {
         {view === "employees" && (<div>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
             <div><h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>{t.employees}</h2><p style={{ color: C.textMuted, fontSize: 13 }}>{emps.length} {t.teamMembers}</p></div>
-            <div style={{ display: "flex", gap: 10 }}><input placeholder={t.search} value={search} onChange={e => setSearch(e.target.value)} style={{ ...inp, width: 170 }} /><button onClick={() => setShowAE(true)} style={{ padding: "9px 18px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{t.add}</button></div>
+            <div style={{ display: "flex", gap: 10 }}><input placeholder={t.search} value={search} onChange={e => setSearch(e.target.value)} style={{ ...inp, width: 170 }} />{isManager && <button onClick={() => setShowAE(true)} style={{ padding: "9px 18px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{t.add}</button>}</div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(275px, 1fr))", gap: 14 }}>
             {emps.filter(e => e.name.toLowerCase().includes(search.toLowerCase()) || e.role.toLowerCase().includes(search.toLowerCase())).map(emp => { const ad = getAssignedDocs(docs, emp.id); const dp = docPct(emp.docChecks, ad); const last = emp.pickHistory[emp.pickHistory.length - 1]; const lp = last ? last.rate : 0; const tgt = getTarget(last ? last.wk : 0); const met = lp >= tgt;
@@ -906,7 +923,8 @@ export default function App() {
               </div>); })}
           </div>
           {showAE && <Modal onClose={() => setShowAE(false)}><h3 style={{ fontSize: 17, fontWeight: 700, marginBottom: 18 }}>{t.addEmployee}</h3>
-            {[{ l: t.fullName, v: nN, s: sNN, p: "e.g. Jane Smith" },{ l: t.role, v: nR, s: sNR, p: "e.g. Warehouse Operative" },{ l: t.pinForSignIn, v: nP, s: v => sNP(v.replace(/\D/g, "")), p: "e.g. 7777" }].map(f => (<div key={f.l} style={{ marginBottom: 12 }}><label style={lbl}>{f.l}</label><input value={f.v} onChange={e => f.s(e.target.value)} placeholder={f.p} style={inp} /></div>))}
+            {[{ l: t.fullName, v: nN, s: sNN, p: "e.g. Jane Smith" },{ l: "Username", v: nUN, s: sNUN, p: "e.g. jsmith" },{ l: t.role, v: nR, s: sNR, p: "e.g. Warehouse Operative" },{ l: t.pinForSignIn, v: nP, s: v => sNP(v.replace(/\D/g, "")), p: "e.g. 7777" }].map(f => (<div key={f.l} style={{ marginBottom: 12 }}><label style={lbl}>{f.l}</label><input value={f.v} onChange={e => f.s(e.target.value)} placeholder={f.p} style={inp} /></div>))}
+            <div style={{ marginBottom: 12 }}><label style={lbl}>Account Type</label><div style={{ display: "flex", gap: 8 }}>{["employee", "supervisor", "manager"].map(r => (<button key={r} onClick={() => sNRole(r)} style={{ flex: 1, padding: "9px", borderRadius: 8, border: `1px solid ${nRole === r ? C.accent : C.border}`, background: nRole === r ? C.accentSoft : "transparent", color: nRole === r ? C.accent : C.textMuted, fontWeight: 600, fontSize: 12, cursor: "pointer", textTransform: "capitalize" }}>{r}</button>))}</div></div>
             <div style={{ marginBottom: 12 }}><label style={lbl}>{t.startDate}</label><input type="date" value={nSD} onChange={e => sNSD(e.target.value)} style={inp} /></div>
             <div style={{ marginBottom: 16 }}><label onClick={() => sNTP(!nTP)} style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", padding: "10px 12px", borderRadius: 8, background: nTP ? C.accentSoft : C.surfaceAlt, border: `1px solid ${nTP ? C.accent : C.border}` }}><div style={{ width: 20, height: 20, borderRadius: 5, border: `2px solid ${nTP ? C.accent : C.textDim}`, background: nTP ? C.accent : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{nTP && <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6L5 8.5L9.5 3.5" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>}</div><span style={{ fontWeight: 600, fontSize: 13, color: nTP ? C.accent : C.textMuted }}>{t.trackPickRate || "Track Pick Rate"}</span></label></div>
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}><button onClick={() => setShowAE(false)} style={{ padding: "9px 18px", borderRadius: 8, border: `1px solid ${C.border}`, background: "transparent", color: C.textMuted, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{t.cancel}</button><button onClick={addE} style={{ padding: "9px 22px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer", opacity: nN.trim() && nP.trim() ? 1 : 0.4 }}>{t.add}</button></div>
@@ -1018,14 +1036,14 @@ export default function App() {
           const showPick = sel.trackPickRate !== false;
           return (<div>
             <button onClick={() => setView("employees")} style={{ background: "transparent", border: "none", color: C.accent, cursor: "pointer", fontSize: 13, fontWeight: 600, marginBottom: 18, padding: 0 }}>{t.backToEmployees}</button>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20, flexWrap: "wrap", gap: 12 }}><div><h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 2 }}>{sel.name}</h2><div style={{ color: C.textMuted, fontSize: 13 }}>{sel.role} · PIN: {sel.pin} · {t.startDate}: {sel.startDate || "—"}</div></div><div style={{ display: "flex", gap: 8 }}><button onClick={async () => { await saveEmp({ ...sel, trackPickRate: !showPick }); }} style={{ padding: "7px 14px", borderRadius: 7, border: `1px solid ${C.border}`, background: showPick ? C.accentSoft : "transparent", color: showPick ? C.accent : C.textDim, fontWeight: 600, fontSize: 11, cursor: "pointer" }}>{showPick ? "✓ " : ""}{t.pickRate}</button><button onClick={() => { if (window.confirm(`${t.remove} ${sel.name}?`)) remE(sel.id); }} style={{ background: C.redSoft, border: "none", color: C.red, padding: "7px 16px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{t.removeEmployee}</button></div></div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20, flexWrap: "wrap", gap: 12 }}><div><h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 2 }}>{sel.name}</h2><div style={{ color: C.textMuted, fontSize: 13 }}>{sel.role}{sel.username ? ` · @${sel.username}` : ""} · {t.startDate}: {sel.startDate || "—"}</div></div><div style={{ display: "flex", gap: 8 }}>{isManager && <button onClick={async () => { await saveEmp({ ...sel, trackPickRate: !showPick }); }} style={{ padding: "7px 14px", borderRadius: 7, border: `1px solid ${C.border}`, background: showPick ? C.accentSoft : "transparent", color: showPick ? C.accent : C.textDim, fontWeight: 600, fontSize: 11, cursor: "pointer" }}>{showPick ? "✓ " : ""}{t.pickRate}</button>}{isManager && <button onClick={() => { if (window.confirm(`${t.remove} ${sel.name}?`)) remE(sel.id); }} style={{ background: C.redSoft, border: "none", color: C.red, padding: "7px 16px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{t.removeEmployee}</button>}</div></div>
             <div style={{ display: "grid", gridTemplateColumns: showPick ? "1fr 1fr" : "1fr", gap: 18 }}>
               {showPick && <div style={card}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}><div><div style={{ fontWeight: 700, fontSize: 15 }}>{t.pickRateHistory}</div><div style={{ color: C.textMuted, fontSize: 12, marginTop: 2 }}>{t.weeklyTracking}</div></div><button onClick={() => setShowAP(true)} style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 12, cursor: "pointer" }}>{t.addWeek}</button></div><div style={{ overflowX: "auto", marginBottom: 8 }}><PickChart history={sel.pickHistory} width={420} height={160} t={t} /></div>{sel.pickHistory.length > 0 && <div style={{ maxHeight: 140, overflowY: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr style={{ borderBottom: `1px solid ${C.border}` }}><th style={{ ...lbl, padding: "6px 8px", textAlign: "left" }}>{t.wk}</th><th style={{ ...lbl, padding: "6px 8px", textAlign: "left" }}>{t.week}</th><th style={{ ...lbl, padding: "6px 8px", textAlign: "right" }}>{t.rate}</th><th style={{ ...lbl, padding: "6px 8px", textAlign: "right" }}>{t.target}</th><th style={{ width: 28 }}></th></tr></thead><tbody>{[...sel.pickHistory].reverse().map((p, i) => { const tgt = getTarget(p.wk); const met = p.rate >= tgt; return (<tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}><td style={{ padding: "6px 8px", fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: C.textMuted }}>{p.wk}</td><td style={{ padding: "6px 8px", fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: C.textDim }}>{p.date}</td><td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", color: met ? C.green : C.red }}>{p.rate}</td><td style={{ padding: "6px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: C.targetYellow }}>{tgt}</td><td style={{ padding: "6px 4px", textAlign: "right" }}><button onClick={async () => { const newHist = sel.pickHistory.filter((_, j) => j !== sel.pickHistory.length - 1 - i); await saveEmp({ ...sel, pickHistory: newHist }); }} style={{ background: "transparent", border: "none", color: C.textDim, cursor: "pointer", fontSize: 11 }}>✕</button></td></tr>); })}</tbody></table></div>}</div>}
               <div style={card}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}><div><div style={{ fontWeight: 700, fontSize: 15 }}>{t.docProgress}</div><div style={{ color: C.textMuted, fontSize: 12, marginTop: 2 }}>{t.assignedDocs}</div></div><div style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center" }}><Ring percent={dp} size={50} stroke={5} color={dp === 100 ? C.green : dp >= 50 ? C.amber : C.red} /><span style={{ position: "absolute", fontSize: 11, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>{dp}%</span></div></div>{ad.length === 0 && <div style={{ color: C.textDim }}>{t.noDocsAssigned}</div>}<div style={{ display: "flex", flexDirection: "column", gap: 5, maxHeight: 300, overflowY: "auto" }}>{["sop", "contract"].map(type => { const td = ad.filter(d => d.type === type); if (!td.length) return null; return (<div key={type}><div style={{ fontSize: 10, color: C.textDim, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.8, margin: "8px 0 6px" }}>{type === "sop" ? t.sopsDocs : t.contractsDocs}</div>{td.map(doc => <EmpDocItem key={doc.id} doc={doc} emp={sel} isMgr={true} />)}</div>); })}</div></div>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18, marginTop: 18 }}>
               <div style={card}><label style={lbl}>{t.managerNotes}</label><div style={{ fontSize: 11, color: C.textDim, marginBottom: 6 }}>✓ {t.employees.toLowerCase()} can see</div><textarea value={sel.notes || ""} onChange={e => updE(sel.id, { notes: e.target.value })} placeholder={t.notesPlaceholder} rows={4} style={{ ...inp, resize: "vertical", lineHeight: 1.5 }} onBlur={() => saveEmp(sel)} /></div>
-              <div style={{ ...card, borderColor: "rgba(239,68,68,0.2)" }}><label style={{ ...lbl, color: C.red }}>{t.privateNotes}</label><div style={{ fontSize: 11, color: C.textDim, marginBottom: 6 }}>🔒</div><textarea value={sel.privateNotes || ""} onChange={e => updE(sel.id, { privateNotes: e.target.value })} placeholder={t.privateNotesPlaceholder} rows={4} style={{ ...inp, resize: "vertical", lineHeight: 1.5, borderColor: "rgba(239,68,68,0.15)" }} onBlur={() => saveEmp(sel)} /></div>
+              {isManager && <div style={{ ...card, borderColor: "rgba(239,68,68,0.2)" }}><label style={{ ...lbl, color: C.red }}>{t.privateNotes}</label><div style={{ fontSize: 11, color: C.textDim, marginBottom: 6 }}>🔒</div><textarea value={sel.privateNotes || ""} onChange={e => updE(sel.id, { privateNotes: e.target.value })} placeholder={t.privateNotesPlaceholder} rows={4} style={{ ...inp, resize: "vertical", lineHeight: 1.5, borderColor: "rgba(239,68,68,0.15)" }} onBlur={() => saveEmp(sel)} /></div>}
             </div>
             {showAP && <Modal onClose={() => setShowAP(false)}><h3 style={{ fontSize: 17, fontWeight: 700, marginBottom: 18 }}>{t.addPickRate}</h3><div style={{ marginBottom: 12 }}><label style={lbl}>{t.weekNumber}</label><input type="number" min="1" value={nPW} onChange={e => sNPW(e.target.value)} placeholder="e.g. 5" style={inp} />{nPW && parseInt(nPW) > 0 && <div style={{ fontSize: 11, color: C.targetYellow, marginTop: 4 }}>{t.target}: {getTarget(parseInt(nPW))}</div>}</div><div style={{ marginBottom: 12 }}><label style={lbl}>{t.weekStarting}</label><input type="date" value={nPD} onChange={e => sNPD(e.target.value)} style={inp} /></div><div style={{ marginBottom: 20 }}><label style={lbl}>{t.pickRate0100}</label><input type="number" min="0" max="100" value={nPR} onChange={e => sNPR(e.target.value)} placeholder="e.g. 45" style={inp} /></div><div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}><button onClick={() => setShowAP(false)} style={{ padding: "9px 18px", borderRadius: 8, border: `1px solid ${C.border}`, background: "transparent", color: C.textMuted, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{t.cancel}</button><button onClick={addPk} style={{ padding: "9px 22px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer", opacity: nPR && nPW ? 1 : 0.4 }}>{t.add}</button></div></Modal>}
           </div>);
