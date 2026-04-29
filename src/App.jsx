@@ -785,15 +785,17 @@ export default function App() {
   );
 
   // ═══════ EMPLOYEE VIEW ═══════
-  if (isEmp && empSelf) {
-    const aDocs = getAssignedDocs(docs, empSelf.id); const sp = docPct(empSelf.docChecks, aDocs);
-    const showPick = empSelf.trackPickRate !== false;
-    const last = empSelf.pickHistory[empSelf.pickHistory.length - 1]; const lPick = last ? last.rate : null; const lWk = last ? last.wk : null; const lTgt = lWk ? getTarget(lWk) : 60;
-    const tr = empSelf.pickHistory.length >= 2 ? empSelf.pickHistory[empSelf.pickHistory.length - 1].rate - empSelf.pickHistory[empSelf.pickHistory.length - 2].rate : 0;
+  if (!isManager && !isSupervisor) {
+    const empSelfView = emps.find(e => e.id === auth?.id);
+    if (!empSelfViewView) return <div style={{ minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", color: C.textMuted, fontFamily: "'DM Sans', sans-serif" }}><div style={{ textAlign: "center" }}><div style={{ fontSize: 16, marginBottom: 12 }}>Account not found</div><button onClick={() => setAuth(null)} style={{ padding: "9px 18px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{t.signOut}</button></div></div>;
+    const aDocs = getAssignedDocs(docs, empSelfViewView.id); const sp = docPct(empSelfViewView.docChecks, aDocs);
+    const showPick = empSelfViewView.trackPickRate !== false;
+    const last = empSelfViewView.pickHistory[empSelfViewView.pickHistory.length - 1]; const lPick = last ? last.rate : null; const lWk = last ? last.wk : null; const lTgt = lWk ? getTarget(lWk) : 60;
+    const tr = empSelfViewView.pickHistory.length >= 2 ? empSelfViewView.pickHistory[empSelfViewView.pickHistory.length - 1].rate - empSelfViewView.pickHistory[empSelfViewView.pickHistory.length - 2].rate : 0;
     return (
       <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'DM Sans', 'Segoe UI', sans-serif" }}>
         <div style={{ borderBottom: `1px solid ${C.border}`, padding: "14px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", background: C.surface, flexWrap: "wrap", gap: 8 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}><div style={{ width: 34, height: 34, borderRadius: 9, background: `linear-gradient(135deg, ${C.accent}, ${C.purple})`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, fontWeight: 700, color: "#fff" }}>P</div><div><div style={{ fontWeight: 700, fontSize: 15 }}>{t.welcome}, {empSelf.name.split(" ")[0]}</div><div style={{ fontSize: 11, color: C.textMuted }}>{empSelf.role}</div></div></div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}><div style={{ width: 34, height: 34, borderRadius: 9, background: `linear-gradient(135deg, ${C.accent}, ${C.purple})`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, fontWeight: 700, color: "#fff" }}>P</div><div><div style={{ fontWeight: 700, fontSize: 15 }}>{t.welcome}, {empSelfView.name.split(" ")[0]}</div><div style={{ fontSize: 11, color: C.textMuted }}>{empSelfView.role}</div></div></div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}><LangSel lang={lang} setLang={setLang} /><button onClick={() => setAuth(null)} style={{ ...nb(false), color: C.red, fontSize: 12 }}>{t.signOut}</button></div>
         </div>
         <div style={{ maxWidth: 720, margin: "0 auto", padding: "28px 20px" }}>
@@ -802,13 +804,13 @@ export default function App() {
               <div><div style={lbl}>{t.latestPickRate} {lWk ? `(${t.wk} ${lWk})` : ""}</div><div style={{ display: "flex", alignItems: "baseline", gap: 10 }}><span style={{ fontSize: 42, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", color: lPick !== null ? (lPick >= lTgt ? C.green : C.red) : C.textDim }}>{lPick ?? "—"}</span><span style={{ fontSize: 14, color: C.textMuted }}>/ {lTgt} {t.target}</span>{tr !== 0 && <span style={{ fontSize: 13, fontWeight: 600, color: tr > 0 ? C.green : C.red }}>{tr > 0 ? "▲" : "▼"} {Math.abs(tr)}</span>}</div>{lPick !== null && <Badge color={lPick >= lTgt ? C.green : C.red} bg={lPick >= lTgt ? C.greenSoft : C.redSoft}>{lPick >= lTgt ? t.aboveTarget : t.belowTarget}</Badge>}</div>
               <div style={{ textAlign: "right" }}><div style={lbl}>{t.docProgress}</div><div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "flex-end" }}><Ring percent={sp} size={40} stroke={4} color={sp === 100 ? C.green : sp >= 50 ? C.amber : C.red} /><span style={{ fontSize: 18, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>{sp}%</span></div></div>
             </div>
-            <div style={lbl}>{t.pickRateTrend}</div><div style={{ overflowX: "auto" }}><PickChart history={empSelf.pickHistory} width={660} height={170} t={t} /></div>
+            <div style={lbl}>{t.pickRateTrend}</div><div style={{ overflowX: "auto" }}><PickChart history={empSelfView.pickHistory} width={660} height={170} t={t} /></div>
           </div>}
-          {empSelf.notes && <div style={{ ...card, marginBottom: 18 }}><div style={lbl}>{t.notesFromManager}</div><div style={{ fontSize: 13, lineHeight: 1.6, marginTop: 6 }}>{empSelf.notes}</div></div>}
+          {empSelfView.notes && <div style={{ ...card, marginBottom: 18 }}><div style={lbl}>{t.notesFromManager}</div><div style={{ fontSize: 13, lineHeight: 1.6, marginTop: 6 }}>{empSelfView.notes}</div></div>}
           <div style={card}>
             <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>{t.docProgress}</div><div style={{ color: C.textMuted, fontSize: 12, marginBottom: 16 }}>{t.yourDocStatus}</div>
             {aDocs.length === 0 && <div style={{ color: C.textDim }}>{t.noDocsAssigned}</div>}
-            {["sop", "contract"].map(type => { const td = aDocs.filter(d => d.type === type); if (!td.length) return null; return (<div key={type} style={{ marginBottom: 16 }}><div style={{ fontSize: 11, color: C.textMuted, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 8 }}>{type === "sop" ? t.sops : t.contracts}</div>{td.map(doc => <EmpDocItem key={doc.id} doc={doc} emp={empSelf} isMgr={false} />)}</div>); })}
+            {["sop", "contract"].map(type => { const td = aDocs.filter(d => d.type === type); if (!td.length) return null; return (<div key={type} style={{ marginBottom: 16 }}><div style={{ fontSize: 11, color: C.textMuted, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 8 }}>{type === "sop" ? t.sops : t.contracts}</div>{td.map(doc => <EmpDocItem key={doc.id} doc={doc} emp={empSelfView} isMgr={false} />)}</div>); })}
           </div>
 
           {/* Employee Onboarding Section */}
@@ -819,7 +821,7 @@ export default function App() {
 
               {obOpenDocId ? (() => {
                 const doc = obDocs.find(d => d.id === obOpenDocId);
-                const existing = obSubs.find(s => s.employee_id === empSelf.id && s.document_id === obOpenDocId);
+                const existing = obSubs.find(s => s.employee_id === empSelfView.id && s.document_id === obOpenDocId);
                 if (!doc) return null;
                 if (existing && (existing.status === "submitted" || existing.status === "flagged" || existing.status === "approved")) {
                   return (
@@ -834,11 +836,11 @@ export default function App() {
                     </div>
                   );
                 }
-                return <OnboardingDocView doc={doc} existing={existing} empName={empSelf.name} t={t} onSubmit={(ans, sig) => submitOnboardingDoc(empSelf.id, doc.id, ans, sig)} onCancel={() => setObOpenDocId(null)} />;
+                return <OnboardingDocView doc={doc} existing={existing} empName={empSelfView.name} t={t} onSubmit={(ans, sig) => submitOnboardingDoc(empSelfView.id, doc.id, ans, sig)} onCancel={() => setObOpenDocId(null)} />;
               })() : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                   {obDocs.map(doc => {
-                    const sub = obSubs.find(s => s.employee_id === empSelf.id && s.document_id === doc.id);
+                    const sub = obSubs.find(s => s.employee_id === empSelfView.id && s.document_id === doc.id);
                     const st = sub?.status;
                     const icon = st === "approved" ? "✅" : st === "flagged" ? "⚠️" : st === "submitted" ? "📨" : st === "rejected" ? "❌" : "📋";
                     const bg = st === "approved" ? C.greenSoft : st === "flagged" || st === "submitted" ? C.amberSoft : st === "rejected" ? C.redSoft : C.surfaceAlt;
