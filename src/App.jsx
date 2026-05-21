@@ -549,7 +549,7 @@ function ManagerReviewDetail({ sub, doc, empName, onApprove, onReject, onBack, t
       </div>
 
       <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-        <button onClick={() => onReject(notes)} style={{ padding: "9px 18px", borderRadius: 8, border: "none", background: C.redSoft, color: C.red, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>Reject</button>
+        <button onClick={() => onReject(notes)} style={{ padding: "9px 18px", borderRadius: 8, border: "none", background: C.redSoft, color: C.red, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>Send Back for Redo</button>
         <button onClick={() => { if (!hasDrawn) return; onApprove(notes, canvasRef.current.toDataURL("image/png")); }} style={{ padding: "9px 22px", borderRadius: 8, border: "none", background: C.green, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer", opacity: hasDrawn ? 1 : 0.4 }}>Approve & Countersign</button>
       </div>
     </div>
@@ -825,19 +825,36 @@ export default function App() {
                 const doc = obDocs.find(d => d.id === obOpenDocId);
                 const existing = obSubs.find(s => s.employee_id === empSelfView.id && s.document_id === obOpenDocId);
                 if (!doc) return null;
+                // If rejected — show message with redo button
+                if (existing && existing.status === "rejected") {
+                  return (
+                    <div>
+                      <button onClick={() => setObOpenDocId(null)} style={{ background: "transparent", border: "none", color: C.accent, cursor: "pointer", fontSize: 13, fontWeight: 600, marginBottom: 14, padding: 0 }}>← Back</button>
+                      <div style={{ padding: "16px", borderRadius: 10, background: C.redSoft, textAlign: "center" }}>
+                        <div style={{ fontSize: 28, marginBottom: 8 }}>❌</div>
+                        <div style={{ fontWeight: 700, fontSize: 15 }}>{doc.title}</div>
+                        <div style={{ color: C.textMuted, fontSize: 12, marginTop: 4 }}>This document has been sent back by your manager. Please redo it below.</div>
+                        {existing.manager_notes && <div style={{ marginTop: 10, padding: "8px 12px", borderRadius: 8, background: C.surfaceAlt, fontSize: 12, color: C.text, textAlign: "left" }}>Manager note: {existing.manager_notes}</div>}
+                        <button onClick={async () => { await saveObSub({ ...existing, status: "pending", answers: {}, signature_png: null, flag_reasons: [], submitted_at: null }); }} style={{ marginTop: 14, padding: "9px 22px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>Start Again</button>
+                      </div>
+                    </div>
+                  );
+                }
+                // If submitted/flagged/approved — show status
                 if (existing && (existing.status === "submitted" || existing.status === "flagged" || existing.status === "approved")) {
                   return (
                     <div>
                       <button onClick={() => setObOpenDocId(null)} style={{ background: "transparent", border: "none", color: C.accent, cursor: "pointer", fontSize: 13, fontWeight: 600, marginBottom: 14, padding: 0 }}>← Back</button>
-                      <div style={{ padding: "16px", borderRadius: 10, background: existing.status === "approved" ? C.greenSoft : existing.status === "rejected" ? C.redSoft : C.amberSoft, textAlign: "center" }}>
-                        <div style={{ fontSize: 28, marginBottom: 8 }}>{existing.status === "approved" ? "✅" : existing.status === "rejected" ? "❌" : "📨"}</div>
+                      <div style={{ padding: "16px", borderRadius: 10, background: existing.status === "approved" ? C.greenSoft : C.amberSoft, textAlign: "center" }}>
+                        <div style={{ fontSize: 28, marginBottom: 8 }}>{existing.status === "approved" ? "✅" : "📨"}</div>
                         <div style={{ fontWeight: 700, fontSize: 15 }}>{doc.title}</div>
-                        <div style={{ color: C.textMuted, fontSize: 12, marginTop: 4 }}>{existing.status === "approved" ? "Approved by manager" : existing.status === "rejected" ? "Rejected — please speak to your manager" : "Submitted — awaiting manager review"}</div>
+                        <div style={{ color: C.textMuted, fontSize: 12, marginTop: 4 }}>{existing.status === "approved" ? "Approved by manager" : existing.status === "flagged" ? "Submitted — flagged for manager review" : "Submitted — awaiting manager review"}</div>
                         {existing.manager_notes && <div style={{ marginTop: 10, padding: "8px 12px", borderRadius: 8, background: C.surfaceAlt, fontSize: 12, color: C.text }}>Manager note: {existing.manager_notes}</div>}
                       </div>
                     </div>
                   );
                 }
+                // Pending/draft/no submission — show the document form
                 return <OnboardingDocView doc={doc} existing={existing} empName={empSelfView.name} t={t} onSubmit={(ans, sig) => submitOnboardingDoc(empSelfView.id, doc.id, ans, sig)} onCancel={() => setObOpenDocId(null)} />;
               })() : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
