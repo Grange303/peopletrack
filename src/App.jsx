@@ -193,13 +193,13 @@ const LANG_NAMES = { en:"English",bg:"Bulgarian",kk:"Kazakh",ky:"Kyrgyz",mk:"Mac
 async function translateText(text, targetLang) {
   if (targetLang === "en") return text;
   try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 4000,
-        messages: [{ role: "user", content: `Translate the following employment document text into ${LANG_NAMES[targetLang] || targetLang}. Return ONLY the translated text.\n\n${text}` }] })
+    const res = await fetch("/api/translate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, targetLang: LANG_NAMES[targetLang] || targetLang })
     });
     const data = await res.json();
-    return data.content?.filter(b => b.type === "text").map(b => b.text).join("\n") || text;
+    return data.translated || text;
   } catch { return text; }
 }
 
