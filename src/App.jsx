@@ -409,11 +409,13 @@ function OnboardingDocView({ doc, existing, empName, onSubmit, onCancel, t, defa
   const [docLang, setDocLang] = useState(defaultLang || "en");
   const [translatedBody, setTranslatedBody] = useState(null);
   const [translating, setTranslating] = useState(false);
+  const [transError, setTransError] = useState(null);
 
   // Translate document content when language changes
   useEffect(() => {
-    if (docLang === "en") { setTranslatedBody(null); return; }
+    if (docLang === "en") { setTranslatedBody(null); setTransError(null); return; }
     setTranslating(true);
+    setTransError(null);
     // Extract all translatable strings and send as numbered lines
     const strings = [];
     if (body.intro) strings.push(body.intro);
@@ -423,6 +425,12 @@ function OnboardingDocView({ doc, existing, empName, onSubmit, onCancel, t, defa
     const numbered = strings.map((s, i) => `[${i}] ${s}`).join("\n\n");
     translateText(numbered, docLang).then(result => {
       try {
+        if (result.includes("[TRANSLATION ERROR") || result.includes("[FETCH ERROR")) {
+          setTransError(result.substring(0, 200));
+          setTranslatedBody(null);
+          setTranslating(false);
+          return;
+        }
         // Parse numbered lines back
         const translated = {};
         const lines = result.split(/\[(\d+)\]\s*/);
@@ -437,9 +445,10 @@ function OnboardingDocView({ doc, existing, empName, onSubmit, onCancel, t, defa
         if (body.items) { newBody.items = body.items.map(it => { const t2 = translated[idx] || it.text; idx++; return { ...it, text: t2 }; }); }
         if (body.questions) { newBody.questions = body.questions.map(q => { const t2 = translated[idx] || q.text; idx++; return { ...q, text: t2 }; }); }
         setTranslatedBody(newBody);
-      } catch { setTranslatedBody(null); }
+        setTransError(null);
+      } catch (e) { setTransError("Parse error: " + e.message); setTranslatedBody(null); }
       setTranslating(false);
-    });
+    }).catch(e => { setTransError("Fetch error: " + e.message); setTranslating(false); });
   }, [docLang, body]);
 
   const displayBody = (docLang !== "en" && translatedBody) ? translatedBody : body;
@@ -474,7 +483,8 @@ function OnboardingDocView({ doc, existing, empName, onSubmit, onCancel, t, defa
           {Object.entries(LL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
       </div>
-      {docLang !== "en" && !translating && <div style={{ padding: "8px 12px", borderRadius: 8, background: "rgba(251,191,36,0.1)", border: "1px solid rgba(251,191,36,0.25)", color: C.targetYellow, fontSize: 12, marginBottom: 10 }}>⚠️ Translation provided for understanding. The English version is the authoritative document.</div>}
+      {docLang !== "en" && !translating && !transError && <div style={{ padding: "8px 12px", borderRadius: 8, background: "rgba(251,191,36,0.1)", border: "1px solid rgba(251,191,36,0.25)", color: C.targetYellow, fontSize: 12, marginBottom: 10 }}>⚠️ Translation provided for understanding. The English version is the authoritative document.</div>}
+      {transError && <div style={{ padding: "8px 12px", borderRadius: 8, background: C.redSoft, border: "1px solid rgba(239,68,68,0.3)", color: C.red, fontSize: 12, marginBottom: 10 }}>❌ Translation failed: {transError}</div>}
       {translating && <div style={{ padding: 20, textAlign: "center", color: C.textMuted, fontSize: 13 }}>{t.translating}</div>}
       {!translating && <>
       {displayBody.intro && <p style={{ color: C.textMuted, fontSize: 13, lineHeight: 1.6, marginBottom: 20 }}>{displayBody.intro}</p>}
