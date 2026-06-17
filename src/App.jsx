@@ -409,13 +409,34 @@ function OnboardingDocView({ doc, existing, empName, onSubmit, onCancel, t, defa
   const [translatedBody, setTranslatedBody] = useState(null);
   const [translating, setTranslating] = useState(false);
 
-  // Translate entire document body when language changes
+  // Translate document content when language changes
   useEffect(() => {
     if (docLang === "en") { setTranslatedBody(null); return; }
     setTranslating(true);
-    const textToTranslate = JSON.stringify(body);
-    translateText(textToTranslate, docLang).then(result => {
-      try { setTranslatedBody(JSON.parse(result)); } catch { setTranslatedBody(null); }
+    // Extract all translatable strings and send as numbered lines
+    const strings = [];
+    if (body.intro) strings.push(body.intro);
+    if (body.sections) body.sections.forEach(s => { strings.push(s.title); strings.push(s.content); });
+    if (body.items) body.items.forEach(it => strings.push(it.text));
+    if (body.questions) body.questions.forEach(q => strings.push(q.text));
+    const numbered = strings.map((s, i) => `[${i}] ${s}`).join("\n\n");
+    translateText(numbered, docLang).then(result => {
+      try {
+        // Parse numbered lines back
+        const translated = {};
+        const lines = result.split(/\[(\d+)\]\s*/);
+        for (let i = 1; i < lines.length; i += 2) {
+          translated[parseInt(lines[i])] = lines[i + 1]?.trim() || strings[parseInt(lines[i])];
+        }
+        // Reconstruct body with translations
+        let idx = 0;
+        const newBody = { ...body };
+        if (body.intro) { newBody.intro = translated[idx] || body.intro; idx++; }
+        if (body.sections) { newBody.sections = body.sections.map(s => { const t2 = translated[idx] || s.title; idx++; const c2 = translated[idx] || s.content; idx++; return { ...s, title: t2, content: c2 }; }); }
+        if (body.items) { newBody.items = body.items.map(it => { const t2 = translated[idx] || it.text; idx++; return { ...it, text: t2 }; }); }
+        if (body.questions) { newBody.questions = body.questions.map(q => { const t2 = translated[idx] || q.text; idx++; return { ...q, text: t2 }; }); }
+        setTranslatedBody(newBody);
+      } catch { setTranslatedBody(null); }
       setTranslating(false);
     });
   }, [docLang, body]);
