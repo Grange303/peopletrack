@@ -65,7 +65,8 @@ function useDocs() {
     const { data } = await supabase.from("documents").select("*");
     if (data) setDocs(data.map(d => ({
       id: d.id, name: d.name, type: d.type, url: d.url || "",
-      assignedTo: d.assigned_to || ["all"], contractText: d.contract_text || ""
+      assignedTo: d.assigned_to || ["all"], contractText: d.contract_text || "",
+      reviewMonths: d.review_months || 12
     })));
     setLoaded(true);
   }, []);
@@ -75,7 +76,8 @@ function useDocs() {
   const saveDoc = useCallback(async (doc) => {
     await supabase.from("documents").upsert({
       id: doc.id, name: doc.name, type: doc.type, url: doc.url,
-      assigned_to: doc.assignedTo, contract_text: doc.contractText
+      assigned_to: doc.assignedTo, contract_text: doc.contractText,
+      review_months: doc.reviewMonths || 12
     });
     await fetchDocs();
   }, [fetchDocs]);
@@ -93,7 +95,8 @@ function useDocs() {
       if (!old || JSON.stringify(old) !== JSON.stringify(doc)) {
         supabase.from("documents").upsert({
           id: doc.id, name: doc.name, type: doc.type, url: doc.url,
-          assigned_to: doc.assignedTo, contract_text: doc.contractText
+          assigned_to: doc.assignedTo, contract_text: doc.contractText,
+          review_months: doc.reviewMonths || 12
         }).then(() => {});
       }
     });
@@ -170,6 +173,20 @@ const nowDateTime = () => { const d = new Date(); return d.toISOString().slice(0
 function getTarget(wk) { if (wk <= 0) return 14; const ramp = 14 + (wk - 1) * 0.75; if (ramp >= 27) return 27; return Math.round(ramp * 10) / 10; }
 function getAssignedDocs(docs, empId) { return docs.filter(d => d.assignedTo?.includes("all") || d.assignedTo?.includes(empId)); }
 const docPct = (ch, aDocs) => { if (!aDocs.length) return 0; return Math.round((Object.keys(ch).filter(k => aDocs.some(d => d.id === k)).length / aDocs.length) * 100); };
+
+// Check SOP review status: "ok" | "due_soon" (within 30 days) | "overdue" | "not_reviewed"
+function getReviewStatus(docCheck, reviewMonths) {
+  if (!docCheck || !reviewMonths) return "not_reviewed";
+  const reviewDate = new Date(docCheck.dateTime || docCheck.date);
+  const now = new Date();
+  const dueDate = new Date(reviewDate);
+  dueDate.setMonth(dueDate.getMonth() + reviewMonths);
+  const warnDate = new Date(dueDate);
+  warnDate.setDate(warnDate.getDate() - 30);
+  if (now > dueDate) return "overdue";
+  if (now > warnDate) return "due_soon";
+  return "ok";
+}
 
 const LANG_NAMES = { en:"English",bg:"Bulgarian",kk:"Kazakh",ky:"Kyrgyz",mk:"Macedonian",ru:"Russian",uk:"Ukrainian" };
 
@@ -381,13 +398,29 @@ function Badge({children,color,bg}){return<span style={{display:"inline-block",p
 function Ring({percent,size=48,stroke=4,color}){const r=(size-stroke)/2,ci=2*Math.PI*r,off=ci-(percent/100)*ci;return(<svg width={size} height={size} style={{transform:"rotate(-90deg)"}}><circle cx={size/2} cy={size/2} r={r} fill="none" stroke={C.border} strokeWidth={stroke}/><circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth={stroke} strokeDasharray={ci} strokeDashoffset={off} strokeLinecap="round" style={{transition:"stroke-dashoffset 0.5s"}}/></svg>);}
 
 // ── Onboarding: Employee Document View ──
-function OnboardingDocView({ doc, existing, empName, onSubmit, onCancel, t }) {
+function OnboardingDocView({ doc, existing, empName, onSubmit, onCancel, t, defaultLang }) {
   const body = doc.body;
   const [answers, setAnswers] = useState(existing?.answers || {});
   const [sigPng, setSigPng] = useState(null);
   const [hasDrawn, setHasDrawn] = useState(false);
   const canvasRef = useRef(null);
   const drawing = useRef(false);
+  const [docLang, setDocLang] = useState(defaultLang || "en");
+  const [translatedBody, setTranslatedBody] = useState(null);
+  const [translating, setTranslating] = useState(false);
+
+  // Translate entire document body when language changes
+  useEffect(() => {
+    if (docLang === "en") { setTranslatedBody(null); return; }
+    setTranslating(true);
+    const textToTranslate = JSON.stringify(body);
+    translateText(textToTranslate, docLang).then(result => {
+      try { setTranslatedBody(JSON.parse(result)); } catch { setTranslatedBody(null); }
+      setTranslating(false);
+    });
+  }, [docLang, body]);
+
+  const displayBody = (docLang !== "en" && translatedBody) ? translatedBody : body;
   const gp = e => { const r = canvasRef.current.getBoundingClientRect(); const p = e.touches ? e.touches[0] : e; return { x: p.clientX - r.left, y: p.clientY - r.top }; };
   const sd = e => { e.preventDefault(); drawing.current = true; const ctx = canvasRef.current.getContext("2d"); const p = gp(e); ctx.beginPath(); ctx.moveTo(p.x, p.y); };
   const mv = e => { if (!drawing.current) return; e.preventDefault(); setHasDrawn(true); const ctx = canvasRef.current.getContext("2d"); const p = gp(e); ctx.lineTo(p.x, p.y); ctx.strokeStyle = C.text; ctx.lineWidth = 2.5; ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.stroke(); };
@@ -396,8 +429,8 @@ function OnboardingDocView({ doc, existing, empName, onSubmit, onCancel, t }) {
 
   const isComplete = () => {
     if (doc.kind === "acknowledge") return !!answers.acknowledged;
-    if (doc.kind === "checklist") return (body.items || []).every(it => answers.items?.[it.id]);
-    if (doc.kind === "questionnaire") return (body.questions || []).every(q => answers[q.id]?.value === "yes" || answers[q.id]?.value === "no");
+    if (doc.kind === "checklist") return (displayBody.items || []).every(it => answers.items?.[it.id]);
+    if (doc.kind === "questionnaire") return (displayBody.questions || []).every(q => answers[q.id]?.value === "yes" || answers[q.id]?.value === "no");
     return false;
   };
   const canSubmit = isComplete() && hasDrawn;
@@ -413,13 +446,20 @@ function OnboardingDocView({ doc, existing, empName, onSubmit, onCancel, t }) {
   return (
     <div>
       <button onClick={onCancel} style={{ background: "transparent", border: "none", color: C.accent, cursor: "pointer", fontSize: 13, fontWeight: 600, marginBottom: 14, padding: 0 }}>← Back</button>
-      <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 8 }}>{doc.title}</h2>
-      {body.intro && <p style={{ color: C.textMuted, fontSize: 13, lineHeight: 1.6, marginBottom: 20 }}>{body.intro}</p>}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
+        <h2 style={{ fontSize: 20, fontWeight: 700 }}>{doc.title}</h2>
+        <select value={docLang} onChange={e => setDocLang(e.target.value)} style={{ padding: "6px 10px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.surfaceAlt, color: C.text, fontSize: 12, outline: "none", cursor: "pointer", fontFamily: "inherit" }}>
+          {Object.entries(LL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+        </select>
+      </div>
+      {docLang !== "en" && !translating && <div style={{ padding: "8px 12px", borderRadius: 8, background: "rgba(251,191,36,0.1)", border: "1px solid rgba(251,191,36,0.25)", color: C.targetYellow, fontSize: 12, marginBottom: 10 }}>⚠️ Translation provided for understanding. The English version is the authoritative document.</div>}
+      {translating && <div style={{ padding: 20, textAlign: "center", color: C.textMuted, fontSize: 13 }}>{t.translating}</div>}
+      {!translating && <>
+      {displayBody.intro && <p style={{ color: C.textMuted, fontSize: 13, lineHeight: 1.6, marginBottom: 20 }}>{displayBody.intro}</p>}
 
-      {/* Acknowledge type */}
       {doc.kind === "acknowledge" && (
         <div>
-          {(body.sections || []).map((sec, i) => (
+          {(displayBody.sections || []).map((sec, i) => (
             <div key={i} style={{ marginBottom: 16, padding: "14px 16px", background: C.surfaceAlt, borderRadius: 10, border: `1px solid ${C.border}` }}>
               <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6, color: C.text }}>{sec.title}</div>
               <div style={{ fontSize: 13, color: C.textMuted, lineHeight: 1.6 }}>{sec.content}</div>
@@ -435,7 +475,7 @@ function OnboardingDocView({ doc, existing, empName, onSubmit, onCancel, t }) {
       {/* Checklist type */}
       {doc.kind === "checklist" && (
         <div>
-          {(body.items || []).map(item => {
+          {(displayBody.items || []).map(item => {
             const ticked = !!answers.items?.[item.id];
             return (
               <label key={item.id} onClick={() => { const items = { ...(answers.items || {}), [item.id]: !ticked }; setAnswers({ ...answers, items }); }} style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", padding: "10px 14px", borderRadius: 8, background: ticked ? C.greenSoft : C.surfaceAlt, border: `1px solid ${ticked ? "rgba(34,197,94,0.18)" : C.border}`, marginBottom: 6 }}>
@@ -445,7 +485,7 @@ function OnboardingDocView({ doc, existing, empName, onSubmit, onCancel, t }) {
             );
           })}
           <div style={{ fontSize: 12, color: C.textMuted, marginTop: 8 }}>
-            {Object.values(answers.items || {}).filter(Boolean).length} / {(body.items || []).length} completed
+            {Object.values(answers.items || {}).filter(Boolean).length} / {(displayBody.items || []).length} completed
           </div>
         </div>
       )}
@@ -453,7 +493,7 @@ function OnboardingDocView({ doc, existing, empName, onSubmit, onCancel, t }) {
       {/* Questionnaire type */}
       {doc.kind === "questionnaire" && (
         <div>
-          {(body.questions || []).map(q => {
+          {(displayBody.questions || []).map(q => {
             const val = answers[q.id]?.value;
             const flagged = q.flag_on && val === q.flag_on;
             return (
@@ -488,6 +528,7 @@ function OnboardingDocView({ doc, existing, empName, onSubmit, onCancel, t }) {
           </div>
         </div>
       )}
+      </>}
     </div>
   );
 }
@@ -572,7 +613,7 @@ export default function App() {
   const [search, setSearch] = useState(""); const [sigDocId, setSigDocId] = useState(null); const [viewSig, setViewSig] = useState(null);
   const [showAE, setShowAE] = useState(false); const [showAD, setShowAD] = useState(false); const [showAP, setShowAP] = useState(false); const [showAssign, setShowAssign] = useState(null);
   const [nN, sNN] = useState(""); const [nR, sNR] = useState(""); const [nP, sNP] = useState(""); const [nSD, sNSD] = useState(todayDate()); const [nTP, sNTP] = useState(true); const [nUN, sNUN] = useState(""); const [nRole, sNRole] = useState("employee");
-  const [nDN, sNDN] = useState(""); const [nDT, sNDT] = useState("sop"); const [nDU, sNDU] = useState(""); const [nDC, sNDC] = useState("");
+  const [nDN, sNDN] = useState(""); const [nDT, sNDT] = useState("sop"); const [nDU, sNDU] = useState(""); const [nDC, sNDC] = useState(""); const [nRM, sNRM] = useState("12");
   const [nPR, sNPR] = useState(""); const [nPD, sNPD] = useState(todayDate()); const [nPW, sNPW] = useState("");
   const [obOpenDocId, setObOpenDocId] = useState(null); const [obReviewId, setObReviewId] = useState(null);
   const [showArchived, setShowArchived] = useState(false);
@@ -622,8 +663,8 @@ export default function App() {
   const remE = async (id) => { await deleteEmp(id); if (selId === id) { setSelId(null); setView("employees"); } };
   const addD = async () => {
     if (!nDN.trim()) return;
-    const doc = { id: "d" + Date.now(), name: nDN.trim(), type: nDT, url: nDU.trim(), assignedTo: ["all"], contractText: nDT === "contract" ? nDC : "" };
-    await saveDoc(doc); sNDN(""); sNDT("sop"); sNDU(""); sNDC(""); setShowAD(false);
+    const doc = { id: "d" + Date.now(), name: nDN.trim(), type: nDT, url: nDU.trim(), assignedTo: ["all"], contractText: nDT === "contract" ? nDC : "", reviewMonths: nDT === "sop" ? parseInt(nRM) || 12 : 0 };
+    await saveDoc(doc); sNDN(""); sNDT("sop"); sNDU(""); sNDC(""); sNRM("12"); setShowAD(false);
   };
   const remD = async (did) => {
     await deleteDoc(did);
@@ -718,41 +759,43 @@ export default function App() {
     const chk = emp.docChecks[doc.id]; const done = !!chk;
     const isContract = doc.type === "contract";
     const [confirmCheck, setConfirmCheck] = useState(false);
-    const contractStatus = chk?.status; // "opened" or "signed"
+    const contractStatus = chk?.status;
     const isOpened = contractStatus === "opened";
     const isSigned = contractStatus === "signed";
-    // For contracts: done means at least opened. For SOPs: done means reviewed.
-    const fullyDone = isContract ? isSigned : done;
-    const bgColor = fullyDone ? C.greenSoft : (isOpened ? C.amberSoft : C.surfaceAlt);
-    const borderColor = fullyDone ? "rgba(34,197,94,0.18)" : (isOpened ? "rgba(234,179,8,0.18)" : C.border);
+    // SOP review status
+    const reviewStatus = !isContract && done ? getReviewStatus(chk, doc.reviewMonths || 12) : null;
+    const isOverdue = reviewStatus === "overdue";
+    const isDueSoon = reviewStatus === "due_soon";
+    const needsReReview = isOverdue || isDueSoon;
+    // Colors
+    const fullyDone = isContract ? isSigned : (done && !isOverdue);
+    const bgColor = isOverdue ? C.redSoft : isDueSoon ? C.amberSoft : fullyDone ? C.greenSoft : (isOpened ? C.amberSoft : C.surfaceAlt);
+    const borderColor = isOverdue ? "rgba(239,68,68,0.2)" : isDueSoon ? "rgba(234,179,8,0.2)" : fullyDone ? "rgba(34,197,94,0.18)" : (isOpened ? "rgba(234,179,8,0.18)" : C.border);
+    // Icon
+    const sopIcon = isOverdue ? "🔴" : isDueSoon ? "🟡" : done ? "✅" : "📄";
     return (
       <div style={{ padding: "12px 14px", borderRadius: 10, background: bgColor, border: `1px solid ${borderColor}`, marginBottom: 6 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: confirmCheck ? 12 : 0, flexWrap: "wrap", gap: 6 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0 }}>
-            <span style={{ fontSize: 16, flexShrink: 0 }}>{isSigned ? "✅" : isOpened ? "📨" : isContract ? "📝" : done ? "✅" : "📄"}</span>
+            <span style={{ fontSize: 16, flexShrink: 0 }}>{isContract ? (isSigned ? "✅" : isOpened ? "📨" : "📝") : sopIcon}</span>
             <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: fullyDone ? C.green : (isOpened ? C.amber : C.text) }}>{doc.name}</div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: isOverdue ? C.red : isDueSoon ? C.amber : fullyDone ? C.green : (isOpened ? C.amber : C.text) }}>{doc.name}</div>
               {isContract && chk && <div style={{ fontSize: 10, color: C.textMuted, fontFamily: "'JetBrains Mono', monospace", marginTop: 2 }}>
                 {isSigned ? <>✅ {t.signed} · {t.confirmedAt || "Confirmed"} {chk.signedConfirmedAt || chk.dateTime}</> :
                  isOpened ? <>📨 {t.opened || "Opened"} {chk.dateTime} · {t.awaitingSignature || "Awaiting signature"}</> : null}
               </div>}
-              {!isContract && done && <div style={{ fontSize: 10, color: C.textMuted, fontFamily: "'JetBrains Mono', monospace", marginTop: 2 }}>
-                {t.reviewedAt} {chk.dateTime || chk.date}
+              {!isContract && done && <div style={{ fontSize: 10, color: isOverdue ? C.red : isDueSoon ? C.amber : C.textMuted, fontFamily: "'JetBrains Mono', monospace", marginTop: 2 }}>
+                {t.reviewedAt} {chk.dateTime || chk.date}{isOverdue ? " · ⚠ REVIEW OVERDUE" : isDueSoon ? " · Review due soon" : doc.reviewMonths ? ` · Next review: ${doc.reviewMonths}mo` : ""}
               </div>}
             </div>
           </div>
           <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-            {/* SOP: View Doc link (no auto-tracking) */}
             {!isContract && doc.url && <a href={doc.url} target="_blank" rel="noopener noreferrer" style={{ padding: "5px 10px", borderRadius: 6, border: `1px solid ${C.border}`, color: C.accent, fontWeight: 600, fontSize: 11, textDecoration: "none" }}>{t.viewDoc}</a>}
-            {/* Contract: Open Document button (auto-marks as opened for employees) */}
             {isContract && doc.url && !isMgr && <button onClick={() => openContractLink(emp.id, doc.id, doc.url)} style={{ padding: "5px 12px", borderRadius: 6, border: `1px solid ${C.border}`, background: "transparent", color: C.accent, fontWeight: 600, fontSize: 11, cursor: "pointer" }}>{t.openDocument || "Open Document"}</button>}
-            {/* Contract: Manager view doc link */}
             {isContract && doc.url && isMgr && <a href={doc.url} target="_blank" rel="noopener noreferrer" style={{ padding: "5px 10px", borderRadius: 6, border: `1px solid ${C.border}`, color: C.accent, fontWeight: 600, fontSize: 11, textDecoration: "none" }}>{t.viewDoc}</a>}
-            {/* Contract: Manager can mark as signed once opened */}
             {isContract && isOpened && isMgr && <button onClick={() => markContractSigned(emp.id, doc.id)} style={{ padding: "5px 12px", borderRadius: 6, border: "none", background: C.green, color: "#fff", fontWeight: 600, fontSize: 11, cursor: "pointer" }}>{t.markSigned || "Mark as Signed"}</button>}
-            {/* SOP: Mark as reviewed button for employees */}
-            {!isContract && !done && !confirmCheck && !isMgr && <button onClick={() => setConfirmCheck(true)} style={{ padding: "5px 12px", borderRadius: 6, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 11, cursor: "pointer" }}>{t.markReviewed}</button>}
-            {/* Contract: Not opened yet - employee prompt */}
+            {/* SOP: show review button if not done, or if overdue/due soon for re-review */}
+            {!isContract && (!done || needsReReview) && !confirmCheck && !isMgr && <button onClick={() => setConfirmCheck(true)} style={{ padding: "5px 12px", borderRadius: 6, border: "none", background: isOverdue ? C.red : C.accent, color: "#fff", fontWeight: 600, fontSize: 11, cursor: "pointer" }}>{needsReReview ? "Re-review" : t.markReviewed}</button>}
             {isContract && !chk && !isMgr && !doc.url && <span style={{ fontSize: 11, color: C.textDim }}>{t.noLink || "No link added"}</span>}
           </div>
         </div>
@@ -856,7 +899,7 @@ export default function App() {
                   );
                 }
                 // Pending/draft/no submission — show the document form
-                return <OnboardingDocView doc={doc} existing={existing} empName={empSelfView.name} t={t} onSubmit={(ans, sig) => submitOnboardingDoc(empSelfView.id, doc.id, ans, sig)} onCancel={() => setObOpenDocId(null)} />;
+                return <OnboardingDocView doc={doc} existing={existing} empName={empSelfView.name} t={t} defaultLang={lang} onSubmit={(ans, sig) => submitOnboardingDoc(empSelfView.id, doc.id, ans, sig)} onCancel={() => setObOpenDocId(null)} />;
               })() : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                   {obDocs.map(doc => {
@@ -967,6 +1010,7 @@ export default function App() {
             <div style={{ marginBottom: 12 }}><label style={lbl}>{t.docName}</label><input value={nDN} onChange={e => sNDN(e.target.value)} placeholder="e.g. Employment Contract" style={inp} /></div>
             <div style={{ marginBottom: 12 }}><label style={lbl}>{t.type}</label><div style={{ display: "flex", gap: 8 }}>{["sop", "contract"].map(ty => (<button key={ty} onClick={() => sNDT(ty)} style={{ flex: 1, padding: "9px", borderRadius: 8, border: `1px solid ${nDT === ty ? C.accent : C.border}`, background: nDT === ty ? C.accentSoft : "transparent", color: nDT === ty ? C.accent : C.textMuted, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{ty === "sop" ? t.sop : t.contract}</button>))}</div></div>
             <div style={{ marginBottom: 12 }}><label style={lbl}>{t.linkToDoc}</label><input value={nDU} onChange={e => sNDU(e.target.value)} placeholder="https://drive.google.com/..." style={inp} /><div style={{ fontSize: 11, color: C.textDim, marginTop: 4 }}>{t.linkHint}</div></div>
+            {nDT === "sop" && <div style={{ marginBottom: 12 }}><label style={lbl}>Review Period (months)</label><input type="number" min="1" max="60" value={nRM} onChange={e => sNRM(e.target.value)} placeholder="12" style={inp} /><div style={{ fontSize: 11, color: C.textDim, marginTop: 4 }}>Employees will be prompted to re-review after this period</div></div>}
             {nDT === "contract" && <div style={{ marginBottom: 12 }}><label style={lbl}>{t.contractText}</label><textarea value={nDC} onChange={e => sNDC(e.target.value)} placeholder="Paste the full contract wording here..." rows={10} style={{ ...inp, resize: "vertical", lineHeight: 1.6 }} /><div style={{ fontSize: 11, color: C.textDim, marginTop: 4 }}>{t.contractTextHint}</div></div>}
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}><button onClick={() => setShowAD(false)} style={{ padding: "9px 18px", borderRadius: 8, border: `1px solid ${C.border}`, background: "transparent", color: C.textMuted, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{t.cancel}</button><button onClick={addD} style={{ padding: "9px 22px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer", opacity: nDN.trim() ? 1 : 0.4 }}>{t.add}</button></div>
           </Modal>}
