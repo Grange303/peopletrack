@@ -199,8 +199,9 @@ async function translateText(text, targetLang) {
       body: JSON.stringify({ text, targetLang: LANG_NAMES[targetLang] || targetLang })
     });
     const data = await res.json();
+    if (data.error) { console.error("Translation API error:", data.error, data.details || ""); return "[TRANSLATION ERROR: " + data.error + "] " + text; }
     return data.translated || text;
-  } catch { return text; }
+  } catch (e) { console.error("Translation fetch error:", e); return "[FETCH ERROR] " + text; }
 }
 
 function downloadCert(docName, chk) {
