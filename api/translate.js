@@ -27,7 +27,7 @@ export default async function handler(req, res) {
         max_tokens: 4000,
         messages: [{
           role: 'user',
-          content: `Translate the following text into ${targetLang}. Maintain all formatting. Return ONLY the translated text with no preamble.\n\n${text}`
+          content: `Translate the following text into ${targetLang}. Maintain all formatting including any numbering like [0], [1], [2]. Return ONLY the translated text with no preamble or explanation.\n\n${text}`
         }]
       })
     });
