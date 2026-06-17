@@ -6,13 +6,13 @@ export default async function handler(req, res) {
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
-    return res.status(500).json({ error: 'API key not configured' });
+    return res.status(500).json({ error: 'API key not configured', details: 'ANTHROPIC_API_KEY environment variable is missing' });
   }
 
   try {
     const { text, targetLang } = req.body;
     if (!text || !targetLang) {
-      return res.status(400).json({ error: 'Missing text or targetLang' });
+      return res.status(400).json({ error: 'Missing text or targetLang', details: `text: ${!!text}, targetLang: ${!!targetLang}` });
     }
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -32,12 +32,17 @@ export default async function handler(req, res) {
       })
     });
 
+    if (!response.ok) {
+      const errBody = await response.text();
+      return res.status(500).json({ error: 'Anthropic API error', details: `Status ${response.status}: ${errBody.substring(0, 200)}` });
+    }
+
     const data = await response.json();
     const translated = data.content?.filter(b => b.type === 'text').map(b => b.text).join('\n') || text;
 
     res.status(200).json({ translated });
   } catch (error) {
     console.error('Translation error:', error);
-    res.status(500).json({ error: 'Translation failed' });
+    res.status(500).json({ error: 'Translation failed', details: error.message });
   }
 }
