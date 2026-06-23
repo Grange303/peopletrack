@@ -154,6 +154,35 @@ function useOnboardingSubs() {
   return { subs, loaded, saveSub, refresh: fetch_ };
 }
 
+// ── Audit hooks ──
+function useAudits() {
+  const [audits, setAudits] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const fetch_ = useCallback(async () => {
+    const { data } = await supabase.from("audits").select("*");
+    if (data) setAudits(data.map(a => ({
+      id: a.id, scheme: a.scheme, title: a.title,
+      auditDate: a.audit_date || "", status: a.status || "planning",
+      items: a.items || [], createdAt: a.created_at
+    })).sort((x, y) => (y.createdAt || "").localeCompare(x.createdAt || "")));
+    setLoaded(true);
+  }, []);
+  useEffect(() => { fetch_(); }, [fetch_]);
+  const saveAudit = useCallback(async (a) => {
+    await supabase.from("audits").upsert({
+      id: a.id, scheme: a.scheme, title: a.title,
+      audit_date: a.auditDate || null, status: a.status || "planning",
+      items: a.items || []
+    });
+    await fetch_();
+  }, [fetch_]);
+  const deleteAudit = useCallback(async (id) => {
+    await supabase.from("audits").delete().eq("id", id);
+    await fetch_();
+  }, [fetch_]);
+  return { audits, loaded, saveAudit, deleteAudit, refresh: fetch_ };
+}
+
 // Flagging: check questionnaire answers for "yes" on flagged questions
 function computeFlags(doc, answers) {
   if (doc.kind !== "questionnaire") return [];
@@ -320,6 +349,182 @@ function exportXLS(emps, docs, t) {
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(emps.map(emp => { const row = { Employee:emp.name }; docs.forEach(d => { const a = d.assignedTo?.includes("all")||d.assignedTo?.includes(emp.id); if(!a)row[d.name]="Not Assigned"; else if(emp.docChecks[d.id]){const c=emp.docChecks[d.id]; if(c.status==="signed") row[d.name]=`SIGNED - Confirmed ${c.signedConfirmedAt||c.dateTime||c.date}`; else if(c.status==="opened") row[d.name]=`OPENED ${c.dateTime||c.date} - Awaiting signature`; else row[d.name]=`Reviewed ${c.dateTime||c.date}`;} else row[d.name]="INCOMPLETE"; }); return row; })), "Document Status");
   const pr=[]; emps.forEach(e=>e.pickHistory.forEach(p=>pr.push({Employee:e.name,Week:p.wk,Date:p.date,Rate:p.rate,Target:getTarget(p.wk),Met:p.rate>=getTarget(p.wk)?"Yes":"No"}))); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(pr.length?pr:[{Note:"No data"}]), "Pick Rates");
   XLSX.writeFile(wb, `PeopleTrack_${todayDate()}.xlsx`);
+}
+
+// ══════════════ AUDIT MODULE ══════════════
+// Status vocabulary used across audit checklist items.
+const AUDIT_STAT = {
+  not_started: { label: "Not started", color: "#7d829a", bg: "rgba(125,130,154,0.12)" },
+  in_progress: { label: "In progress", color: "#eab308", bg: "rgba(234,179,8,0.1)" },
+  ready:       { label: "Ready",       color: "#22c55e", bg: "rgba(34,197,94,0.1)" },
+  attention:   { label: "Attention",   color: "#ef4444", bg: "rgba(239,68,68,0.1)" },
+  na:          { label: "N/A",         color: "#4a4f65", bg: "rgba(74,79,101,0.12)" },
+};
+const AUDIT_STAT_ORDER = ["not_started", "in_progress", "ready", "na"];
+
+// Scheme templates. `auto` links a requirement to live PeopleTrack data so it
+// self-verifies. Add new schemes (Red Tractor, LEAF, IOA) as sibling keys.
+const AUDIT_SCHEMES = {
+  sedex: {
+    name: "Sedex / SMETA",
+    fullName: "SMETA — Sedex Members Ethical Trade Audit (4-Pillar)",
+    color: "#8b5cf6",
+    sections: [
+      { id: "labour", name: "Pillar 1 · Labour Standards", items: [
+        { id: "mgmt", req: "Management systems & code implementation", guidance: "Documented ethical trade policy, responsibilities assigned, and the ETI Base Code communicated to workers." },
+        { id: "rtw", req: "Worker records & right-to-work documentation on file", guidance: "Each worker has a complete record with identity / right-to-work checks.", auto: "onboarding" },
+        { id: "freely", req: "Employment is freely chosen", guidance: "No forced, bonded or involuntary labour; no withheld documents or deposits." },
+        { id: "foa", req: "Freedom of association & collective bargaining", guidance: "Workers may join (or not) a union and raise concerns without fear." },
+        { id: "contracts", req: "Written terms of employment issued and signed", guidance: "All workers have signed contracts in a language they understand.", auto: "contracts" },
+        { id: "wages", req: "Living wages are paid", guidance: "Pay meets or exceeds the legal/industry minimum; payslips provided." },
+        { id: "hours", req: "Working hours are not excessive", guidance: "Hours comply with law; accurate time records kept; rest days given." },
+        { id: "discrim", req: "No discrimination is practised", guidance: "Hiring, pay and treatment are free from discrimination." },
+        { id: "regular", req: "Regular employment is provided", guidance: "Obligations to workers are not avoided through labour-only contracting." },
+        { id: "harsh", req: "No harsh or inhumane treatment", guidance: "No physical/verbal abuse; grievance procedure in place." },
+        { id: "induction", req: "Worker induction & training records complete", guidance: "All workers inducted and have reviewed assigned SOPs.", auto: "sops" },
+        { id: "labour_providers", req: "Sub-contracting, homeworking & labour providers controlled", guidance: "Licensed labour providers (GLAA) used; agency workers documented." },
+      ]},
+      { id: "hs", name: "Pillar 2 · Health & Safety", items: [
+        { id: "hs_policy", req: "Health & Safety policy and risk assessments in place", guidance: "Current written H&S policy and task/area risk assessments." },
+        { id: "hs_training", req: "H&S induction & training completed by all workers", guidance: "Workers trained on safety SOPs relevant to their role.", auto: "sops" },
+        { id: "first_aid", req: "First aid provision & accident records", guidance: "Trained first aiders, accident book maintained, RIDDOR awareness." },
+        { id: "ppe", req: "Machinery guarding, PPE & chemical safety", guidance: "PPE issued, COSHH assessments, safe machinery operation." },
+        { id: "welfare", req: "Welfare facilities & worker accommodation", guidance: "Adequate toilets, rest areas, drinking water; accommodation meets standards." },
+      ]},
+      { id: "env", name: "Pillar 3 · Environment", items: [
+        { id: "env_permits", req: "Environmental permits & waste management", guidance: "Required permits held; waste segregated and disposed of legally." },
+        { id: "chemicals", req: "Pesticide / chemical storage & handling", guidance: "Secure storage, application records, trained operators." },
+      ]},
+      { id: "ethics", name: "Pillar 4 · Business Ethics", items: [
+        { id: "bribery", req: "Anti-bribery & corruption policy", guidance: "Policy communicated; gifts/hospitality controls in place." },
+        { id: "grievance", req: "Grievance & whistleblowing procedure", guidance: "Confidential route for workers to raise concerns, with records." },
+      ]},
+    ],
+  },
+};
+
+// Build a fresh audit item-list from a scheme template.
+function buildAuditItems(schemeKey) {
+  const scheme = AUDIT_SCHEMES[schemeKey];
+  if (!scheme) return [];
+  const out = [];
+  scheme.sections.forEach(sec => {
+    sec.items.forEach(it => {
+      out.push({
+        id: `${sec.id}_${it.id}`, section: sec.id, sectionName: sec.name,
+        req: it.req, guidance: it.guidance || "", auto: it.auto || null,
+        status: "not_started", notes: "", evidence: [],
+      });
+    });
+  });
+  return out;
+}
+
+// Live evaluation of an `auto` item against current worker/document data.
+// Returns { status, detail, metric } or null when there is nothing to verify.
+function autoEvaluateAudit(auto, emps, docs, obSubs) {
+  const active = (emps || []).filter(e => !e.archived);
+  if (!active.length) return { status: "attention", detail: "No active workers on record.", metric: "0/0" };
+  if (auto === "contracts") {
+    const contracts = (docs || []).filter(d => d.type === "contract");
+    if (!contracts.length) return { status: "in_progress", detail: "No contracts have been set up yet.", metric: "0/0" };
+    const fully = active.filter(e => contracts
+      .filter(c => c.assignedTo?.includes("all") || c.assignedTo?.includes(e.id))
+      .every(c => { const chk = e.docChecks[c.id]; return chk && (chk.status === "signed" || chk.sig || chk.status === undefined); }));
+    const ok = fully.length === active.length;
+    return { status: ok ? "ready" : "attention", metric: `${fully.length}/${active.length}`,
+      detail: `${fully.length} of ${active.length} active workers have signed all assigned contracts.` };
+  }
+  if (auto === "sops") {
+    const sops = (docs || []).filter(d => d.type === "sop");
+    if (!sops.length) return { status: "in_progress", detail: "No SOPs / training documents set up yet.", metric: "0/0" };
+    const fully = active.filter(e => sops
+      .filter(s => s.assignedTo?.includes("all") || s.assignedTo?.includes(e.id))
+      .every(s => !!e.docChecks[s.id]));
+    const ok = fully.length === active.length;
+    return { status: ok ? "ready" : "attention", metric: `${fully.length}/${active.length}`,
+      detail: `${fully.length} of ${active.length} active workers have reviewed all assigned SOPs / training.` };
+  }
+  if (auto === "onboarding") {
+    const withRecord = active.filter(e => (obSubs || []).some(s => s.employee_id === e.id));
+    const flagged = (obSubs || []).filter(s => s.status === "flagged").length;
+    if (!withRecord.length) return { status: "in_progress", detail: "No onboarding records captured yet.", metric: `0/${active.length}` };
+    const ok = withRecord.length === active.length && flagged === 0;
+    return { status: ok ? "ready" : "attention", metric: `${withRecord.length}/${active.length}`,
+      detail: `${withRecord.length} of ${active.length} workers have onboarding records${flagged ? ` · ${flagged} flagged for review` : ""}.` };
+  }
+  return null;
+}
+
+// Effective status of an item: auto items reflect live data unless marked N/A.
+function auditItemStatus(item, ctx) {
+  if (item.status === "na") return "na";
+  if (item.auto) {
+    const ev = autoEvaluateAudit(item.auto, ctx.emps, ctx.docs, ctx.obSubs);
+    if (ev) return ev.status;
+  }
+  return item.status || "not_started";
+}
+
+function auditProgress(audit, ctx) {
+  const items = audit.items || [];
+  const counted = items.filter(i => auditItemStatus(i, ctx) !== "na");
+  if (!counted.length) return 0;
+  const ready = counted.filter(i => auditItemStatus(i, ctx) === "ready").length;
+  return Math.round((ready / counted.length) * 100);
+}
+
+// Export a single audit as a multi-sheet "audit pack" workbook for the auditor.
+function exportAuditPack(audit, ctx, emps, docs) {
+  const scheme = AUDIT_SCHEMES[audit.scheme];
+  const wb = XLSX.utils.book_new();
+  const items = audit.items || [];
+  const counts = AUDIT_STAT_ORDER.reduce((m, k) => { m[k] = 0; return m; }, {});
+  items.forEach(i => { counts[auditItemStatus(i, ctx)] = (counts[auditItemStatus(i, ctx)] || 0) + 1; });
+  const summary = [
+    { Field: "Scheme", Value: scheme ? scheme.fullName : audit.scheme },
+    { Field: "Audit Title", Value: audit.title },
+    { Field: "Audit Date", Value: audit.auditDate || "Not scheduled" },
+    { Field: "Overall Readiness", Value: `${auditProgress(audit, ctx)}%` },
+    { Field: "Items Ready", Value: counts.ready || 0 },
+    { Field: "Items In Progress", Value: counts.in_progress || 0 },
+    { Field: "Items Not Started", Value: counts.not_started || 0 },
+    { Field: "Items Needing Attention", Value: counts.attention || 0 },
+    { Field: "Items N/A", Value: counts.na || 0 },
+    { Field: "Pack Generated", Value: nowDateTime() },
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summary), "Summary");
+
+  const checklist = items.map(i => {
+    const ev = i.auto ? autoEvaluateAudit(i.auto, ctx.emps, ctx.docs, ctx.obSubs) : null;
+    const evList = (i.evidence || []).map(e => e.type === "link" ? `${e.label || "Link"}: ${e.url}` : e.text).filter(Boolean);
+    if (ev) evList.unshift(`Auto-verified (${ev.metric}): ${ev.detail}`);
+    return {
+      Section: i.sectionName, Requirement: i.req,
+      Status: (AUDIT_STAT[auditItemStatus(i, ctx)] || {}).label || "",
+      "Auto-linked": i.auto ? "Yes" : "",
+      Evidence: evList.join("  |  ") || "—",
+      Notes: i.notes || "",
+    };
+  });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(checklist.length ? checklist : [{ Note: "No items" }]), "Checklist");
+
+  const active = emps.filter(e => !e.archived);
+  const workerRows = active.map(e => {
+    const contracts = docs.filter(d => (d.type === "contract") && (d.assignedTo?.includes("all") || d.assignedTo?.includes(e.id)));
+    const sops = docs.filter(d => (d.type === "sop") && (d.assignedTo?.includes("all") || d.assignedTo?.includes(e.id)));
+    const ob = (ctx.obSubs || []).some(s => s.employee_id === e.id);
+    return {
+      Worker: e.name, Role: e.role, Start: e.startDate || "",
+      "Contracts Signed": `${contracts.filter(c => e.docChecks[c.id]).length}/${contracts.length}`,
+      "SOPs / Training Reviewed": `${sops.filter(s => e.docChecks[s.id]).length}/${sops.length}`,
+      "Onboarding Record": ob ? "Yes" : "No",
+    };
+  });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(workerRows.length ? workerRows : [{ Note: "No active workers" }]), "Worker Evidence");
+
+  const safe = (audit.title || audit.scheme).replace(/[^a-z0-9]+/gi, "_");
+  XLSX.writeFile(wb, `AuditPack_${safe}_${todayDate()}.xlsx`);
 }
 
 // ── Translations ──
@@ -637,6 +842,7 @@ export default function App() {
   const { managerPin, loaded: sL } = useSettings();
   const { obDocs, loaded: obDL, refresh: refreshObDocs } = useOnboardingDocs();
   const { subs: obSubs, loaded: obSL, saveSub: saveObSub, refresh: refreshObSubs } = useOnboardingSubs();
+  const { audits, loaded: auL, saveAudit, deleteAudit, refresh: refreshAudits } = useAudits();
   const [lang, setLang] = useLang();
 
   const [auth, setAuth] = useState(null);
@@ -649,15 +855,19 @@ export default function App() {
   const [nPR, sNPR] = useState(""); const [nPD, sNPD] = useState(todayDate()); const [nPW, sNPW] = useState("");
   const [obOpenDocId, setObOpenDocId] = useState(null); const [obReviewId, setObReviewId] = useState(null);
   const [showArchived, setShowArchived] = useState(false);
+  const [selAuditId, setSelAuditId] = useState(null); const [showAddAudit, setShowAddAudit] = useState(false);
+  const [naScheme, setNaScheme] = useState("sedex"); const [naTitle, setNaTitle] = useState(""); const [naDate, setNaDate] = useState("");
+  const [auditFilterSec, setAuditFilterSec] = useState("all");
+  const [evDraft, setEvDraft] = useState({ itemId: null, label: "", url: "" });
 
   // Auto-refresh data every 30 seconds so changes show up across devices
   useEffect(() => {
-    const interval = setInterval(() => { refreshEmps(); refreshDocs(); refreshObSubs(); }, 30000);
+    const interval = setInterval(() => { refreshEmps(); refreshDocs(); refreshObSubs(); refreshAudits(); }, 30000);
     return () => clearInterval(interval);
-  }, [refreshEmps, refreshDocs, refreshObSubs]);
+  }, [refreshEmps, refreshDocs, refreshObSubs, refreshAudits]);
 
   const t = T[lang] || T.en;
-  const loaded = eL && dL && sL && obDL && obSL;
+  const loaded = eL && dL && sL && obDL && obSL && auL;
   const isEmp = auth?.role === "employee";
   const empSelf = isEmp ? emps.find(e => e.id === auth.id) : null;
   const sel = emps.find(e => e.id === selId);
@@ -773,6 +983,45 @@ export default function App() {
     await saveObSub({ ...sub, status: "rejected", manager_notes: notes, reviewed_at: new Date().toISOString(), reviewed_by: "manager" });
     setObReviewId(null);
   };
+
+  // ── Audit handlers ──
+  const auditCtx = { emps, docs, obSubs };
+  const addAudit = async () => {
+    const scheme = AUDIT_SCHEMES[naScheme]; if (!scheme) return;
+    const audit = {
+      id: "a" + Date.now(), scheme: naScheme,
+      title: naTitle.trim() || `${scheme.name} ${new Date().getFullYear()}`,
+      auditDate: naDate || "", status: "planning", items: buildAuditItems(naScheme),
+    };
+    await saveAudit(audit);
+    setNaTitle(""); setNaDate(""); setNaScheme("sedex"); setShowAddAudit(false);
+    setSelAuditId(audit.id); setView("auditDetail");
+  };
+  const updateAuditItem = async (auditId, itemId, updates) => {
+    const audit = audits.find(a => a.id === auditId); if (!audit) return;
+    await saveAudit({ ...audit, items: audit.items.map(i => i.id === itemId ? { ...i, ...updates } : i) });
+  };
+  const cycleAuditStatus = (auditId, item) => {
+    const idx = AUDIT_STAT_ORDER.indexOf(item.status || "not_started");
+    const next = AUDIT_STAT_ORDER[(idx + 1) % AUDIT_STAT_ORDER.length];
+    updateAuditItem(auditId, item.id, { status: next });
+  };
+  const addAuditEvidence = async (auditId, itemId) => {
+    if (!evDraft.url.trim() && !evDraft.label.trim()) return;
+    const audit = audits.find(a => a.id === auditId); if (!audit) return;
+    const item = audit.items.find(i => i.id === itemId); if (!item) return;
+    const entry = evDraft.url.trim()
+      ? { type: "link", label: evDraft.label.trim() || "Evidence", url: evDraft.url.trim() }
+      : { type: "note", text: evDraft.label.trim() };
+    await updateAuditItem(auditId, itemId, { evidence: [...(item.evidence || []), entry] });
+    setEvDraft({ itemId, label: "", url: "" });
+  };
+  const removeAuditEvidence = async (auditId, itemId, idx) => {
+    const audit = audits.find(a => a.id === auditId); if (!audit) return;
+    const item = audit.items.find(i => i.id === itemId); if (!item) return;
+    await updateAuditItem(auditId, itemId, { evidence: (item.evidence || []).filter((_, i) => i !== idx) });
+  };
+  const removeAudit = async (id) => { await deleteAudit(id); if (selAuditId === id) { setSelAuditId(null); setView("audits"); } };
 
   const getEmpObProgress = (empId) => {
     if (!obDocs.length) return { total: 0, done: 0, pct: 0, hasFlagged: false };
@@ -982,6 +1231,7 @@ export default function App() {
           <button style={nb(view === "employees" || view === "detail")} onClick={() => setView("employees")}>{t.employees}</button>
           {isManager && <button style={nb(view === "documents")} onClick={() => setView("documents")}>{t.documents}</button>}
           <button style={nb(view === "onboarding")} onClick={() => setView("onboarding")}>Onboarding</button>
+          {isManager && <button style={nb(view === "audits" || view === "auditDetail")} onClick={() => setView("audits")}>Audits</button>}
           {isManager && <button onClick={() => exportXLS(emps, docs, t)} style={{ padding: "9px 16px", borderRadius: 8, border: "none", background: "rgba(34,197,94,0.15)", color: C.green, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>📊 {t.exportExcel}</button>}
           <div style={{ width: 1, height: 24, background: C.border, margin: "0 4px" }} /><LangSel lang={lang} setLang={setLang} />
           <button onClick={() => setAuth(null)} style={{ ...nb(false), color: C.red, fontSize: 12 }}>{t.signOut}</button>
@@ -1131,6 +1381,108 @@ export default function App() {
             </div>
           )}
         </div>)}
+
+        {/* ═══ AUDITS (Manager) ═══ */}
+        {view === "audits" && (<div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, flexWrap: "wrap", gap: 12 }}>
+            <div><h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>Audits</h2><p style={{ color: C.textMuted, fontSize: 13 }}>Assurance & ethical audit readiness</p></div>
+            <button onClick={() => setShowAddAudit(true)} style={{ padding: "9px 18px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>+ New Audit</button>
+          </div>
+          <div style={{ padding: "10px 14px", borderRadius: 10, background: C.accentSoft, border: `1px solid ${C.border}`, color: C.textMuted, fontSize: 12.5, lineHeight: 1.6, marginBottom: 22 }}>
+            Build a checklist per scheme, attach evidence, and export an audit pack for the auditor. Items marked <span style={{ color: C.accent, fontWeight: 600 }}>Auto</span> verify themselves live from your worker records, signed contracts, SOP reviews and onboarding data.
+          </div>
+          {audits.length === 0 ? (
+            <div style={{ ...card, textAlign: "center", padding: 48, color: C.textMuted }}>No audits yet. Create one to start tracking readiness.</div>
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 14 }}>
+              {audits.map(a => { const scheme = AUDIT_SCHEMES[a.scheme]; const pct = auditProgress(a, auditCtx); const attn = (a.items || []).filter(i => auditItemStatus(i, auditCtx) === "attention").length;
+                return (<div key={a.id} onClick={() => { setSelAuditId(a.id); setView("auditDetail"); }} style={{ ...card, cursor: "pointer", transition: "border-color 0.2s" }} onMouseEnter={e => e.currentTarget.style.borderColor = C.accent} onMouseLeave={e => e.currentTarget.style.borderColor = C.border}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                    <div><Badge color={scheme?.color || C.accent} bg={C.accentSoft}>{scheme?.name || a.scheme}</Badge><div style={{ fontWeight: 700, fontSize: 15, margin: "10px 0 2px" }}>{a.title}</div><div style={{ color: C.textMuted, fontSize: 12 }}>{a.auditDate ? `📅 ${a.auditDate}` : "Date not set"}</div></div>
+                    <Ring percent={pct} size={48} stroke={4} color={pct === 100 ? C.green : pct >= 50 ? C.amber : C.red} />
+                  </div>
+                  <div style={{ marginTop: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span style={{ fontSize: 12, color: C.textMuted }}>{(a.items || []).length} requirements</span>
+                    {attn > 0 ? <Badge color={C.red} bg={C.redSoft}>{attn} need attention</Badge> : <Badge color={C.green} bg={C.greenSoft}>{pct}% ready</Badge>}
+                  </div>
+                </div>); })}
+            </div>
+          )}
+          {showAddAudit && <Modal onClose={() => setShowAddAudit(false)}>
+            <h3 style={{ fontSize: 17, fontWeight: 700, marginBottom: 18 }}>New Audit</h3>
+            <div style={{ marginBottom: 12 }}><label style={lbl}>Scheme</label><div style={{ display: "flex", flexDirection: "column", gap: 8 }}>{Object.entries(AUDIT_SCHEMES).map(([k, s]) => (<button key={k} onClick={() => setNaScheme(k)} style={{ textAlign: "left", padding: "10px 12px", borderRadius: 8, border: `1px solid ${naScheme === k ? C.accent : C.border}`, background: naScheme === k ? C.accentSoft : "transparent", color: naScheme === k ? C.accent : C.text, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{s.name}<div style={{ fontSize: 11, color: C.textMuted, fontWeight: 400, marginTop: 2 }}>{s.fullName}</div></button>))}</div></div>
+            <div style={{ marginBottom: 12 }}><label style={lbl}>Audit Title</label><input value={naTitle} onChange={e => setNaTitle(e.target.value)} placeholder={`e.g. SMETA ${new Date().getFullYear()}`} style={inp} /></div>
+            <div style={{ marginBottom: 16 }}><label style={lbl}>Audit Date (optional)</label><input type="date" value={naDate} onChange={e => setNaDate(e.target.value)} style={inp} /></div>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}><button onClick={() => setShowAddAudit(false)} style={{ padding: "9px 18px", borderRadius: 8, border: `1px solid ${C.border}`, background: "transparent", color: C.textMuted, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{t.cancel}</button><button onClick={addAudit} style={{ padding: "9px 22px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>Create</button></div>
+          </Modal>}
+        </div>)}
+
+        {/* ═══ AUDIT DETAIL (Manager) ═══ */}
+        {view === "auditDetail" && (() => {
+          const audit = audits.find(a => a.id === selAuditId);
+          if (!audit) return <div style={{ ...card, textAlign: "center", color: C.textMuted }}>Audit not found.<div style={{ marginTop: 12 }}><button onClick={() => setView("audits")} style={nb(false)}>← Back to Audits</button></div></div>;
+          const scheme = AUDIT_SCHEMES[audit.scheme]; const pct = auditProgress(audit, auditCtx);
+          const sections = scheme?.sections || [];
+          const shownItems = (audit.items || []).filter(i => auditFilterSec === "all" || i.section === auditFilterSec);
+          return (<div>
+            <button onClick={() => setView("audits")} style={{ background: "transparent", border: "none", color: C.accent, cursor: "pointer", fontSize: 13, fontWeight: 600, marginBottom: 18, padding: 0 }}>← Back to Audits</button>
+            <div style={{ ...card, marginBottom: 20 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16 }}>
+                <div style={{ flex: 1, minWidth: 220 }}>
+                  <Badge color={scheme?.color || C.accent} bg={C.accentSoft}>{scheme?.name || audit.scheme}</Badge>
+                  <h2 style={{ fontSize: 22, fontWeight: 700, margin: "10px 0 4px" }}>{audit.title}</h2>
+                  <div style={{ color: C.textMuted, fontSize: 13 }}>{scheme?.fullName}{audit.auditDate ? ` · 📅 ${audit.auditDate}` : ""}</div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+                  <div style={{ textAlign: "center" }}><Ring percent={pct} size={56} stroke={5} color={pct === 100 ? C.green : pct >= 50 ? C.amber : C.red} /><div style={{ fontSize: 11, color: C.textMuted, marginTop: 4 }}>{pct}% ready</div></div>
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
+                <button onClick={() => exportAuditPack(audit, auditCtx, emps, docs)} style={{ padding: "9px 16px", borderRadius: 8, border: "none", background: "rgba(34,197,94,0.15)", color: C.green, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>📊 Export Audit Pack</button>
+                <select value={audit.status} onChange={e => saveAudit({ ...audit, status: e.target.value })} style={{ padding: "9px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surfaceAlt, color: C.text, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>
+                  <option value="planning">Planning</option><option value="in_progress">In Progress</option><option value="complete">Complete</option>
+                </select>
+                <button onClick={() => { if (window.confirm(`Delete audit "${audit.title}"?`)) removeAudit(audit.id); }} style={{ marginLeft: "auto", padding: "9px 14px", borderRadius: 8, border: "none", background: C.redSoft, color: C.red, fontWeight: 600, fontSize: 12, cursor: "pointer" }}>Delete</button>
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 6, marginBottom: 18, flexWrap: "wrap" }}>
+              <button onClick={() => setAuditFilterSec("all")} style={{ ...nb(auditFilterSec === "all"), padding: "6px 12px", fontSize: 12 }}>All</button>
+              {sections.map(s => (<button key={s.id} onClick={() => setAuditFilterSec(s.id)} style={{ ...nb(auditFilterSec === s.id), padding: "6px 12px", fontSize: 12 }}>{s.name.replace(/^Pillar \d+ · /, "")}</button>))}
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {shownItems.map(item => {
+                const eff = auditItemStatus(item, auditCtx); const st = AUDIT_STAT[eff];
+                const ev = item.auto ? autoEvaluateAudit(item.auto, emps, docs, obSubs) : null;
+                return (<div key={item.id} style={{ ...card, padding: "16px 18px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+                    <div style={{ flex: 1, minWidth: 220 }}>
+                      <div style={{ fontWeight: 600, fontSize: 14 }}>{item.req}{item.auto && <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, color: C.accent, background: C.accentSoft, padding: "2px 7px", borderRadius: 99, textTransform: "uppercase", letterSpacing: 0.5 }}>Auto</span>}</div>
+                      {item.guidance && <div style={{ fontSize: 12, color: C.textMuted, marginTop: 4, lineHeight: 1.55 }}>{item.guidance}</div>}
+                      {ev && <div style={{ fontSize: 12, color: st.color, marginTop: 6, fontWeight: 500 }}>● {ev.detail}</div>}
+                    </div>
+                    {item.auto
+                      ? <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}><Badge color={st.color} bg={st.bg}>{st.label}{ev?.metric ? ` · ${ev.metric}` : ""}</Badge><button onClick={() => updateAuditItem(audit.id, item.id, { status: item.status === "na" ? "not_started" : "na" })} style={{ background: "transparent", border: `1px solid ${C.border}`, color: C.textMuted, padding: "3px 8px", borderRadius: 6, fontSize: 10, fontWeight: 600, cursor: "pointer" }}>{item.status === "na" ? "Use auto" : "Mark N/A"}</button></div>
+                      : <button onClick={() => cycleAuditStatus(audit.id, item)} title="Click to change status" style={{ border: "none", cursor: "pointer", padding: "4px 12px", borderRadius: 99, fontSize: 11, fontWeight: 600, color: st.color, background: st.bg }}>{st.label} ▾</button>}
+                  </div>
+                  <div style={{ marginTop: 12 }}>
+                    {(item.evidence || []).length > 0 && <div style={{ display: "flex", flexDirection: "column", gap: 5, marginBottom: 8 }}>{(item.evidence || []).map((e, idx) => (<div key={idx} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, background: C.surfaceAlt, borderRadius: 7, padding: "6px 10px" }}><span style={{ flex: 1 }}>{e.type === "link" ? <a href={e.url} target="_blank" rel="noopener noreferrer" style={{ color: C.accent, textDecoration: "none" }}>🔗 {e.label} ↗</a> : <span style={{ color: C.text }}>📝 {e.text}</span>}</span><button onClick={() => removeAuditEvidence(audit.id, item.id, idx)} style={{ background: "transparent", border: "none", color: C.textDim, cursor: "pointer", fontSize: 14 }}>✕</button></div>))}</div>}
+                    {evDraft.itemId === item.id ? (
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                        <input value={evDraft.label} onChange={e => setEvDraft({ ...evDraft, label: e.target.value })} placeholder="Label / note" style={{ ...inp, flex: 1, minWidth: 120, padding: "7px 10px", fontSize: 12 }} />
+                        <input value={evDraft.url} onChange={e => setEvDraft({ ...evDraft, url: e.target.value })} placeholder="Link URL (optional)" style={{ ...inp, flex: 1, minWidth: 120, padding: "7px 10px", fontSize: 12 }} />
+                        <button onClick={() => addAuditEvidence(audit.id, item.id)} style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 12, cursor: "pointer" }}>Add</button>
+                        <button onClick={() => setEvDraft({ itemId: null, label: "", url: "" })} style={{ padding: "7px 12px", borderRadius: 7, border: `1px solid ${C.border}`, background: "transparent", color: C.textMuted, fontSize: 12, cursor: "pointer" }}>{t.cancel}</button>
+                      </div>
+                    ) : (
+                      <button onClick={() => setEvDraft({ itemId: item.id, label: "", url: "" })} style={{ background: "transparent", border: `1px dashed ${C.border}`, color: C.accent, padding: "6px 12px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ Add evidence</button>
+                    )}
+                    <textarea value={item.notes || ""} onChange={e => updateAuditItem(audit.id, item.id, { notes: e.target.value })} placeholder="Notes for the auditor…" rows={2} style={{ ...inp, marginTop: 8, resize: "vertical", fontSize: 12, lineHeight: 1.5 }} />
+                  </div>
+                </div>);
+              })}
+            </div>
+          </div>);
+        })()}
 
         {view === "detail" && sel && (() => {
           const ad = getAssignedDocs(docs, sel.id); const dp = docPct(sel.docChecks, ad);
