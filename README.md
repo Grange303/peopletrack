@@ -7,8 +7,9 @@ contracts with e-signatures, multilingual onboarding, pick-rate tracking, and an
 ## Audits module
 
 Managers get an **Audits** tab built on a **single unified framework** that
-covers **Red Tractor, LEAF Marque, Sedex/SMETA, Irish Organic Association and
-seasonal-worker** audits at once. Because these schemes overlap heavily, every
+covers **Red Tractor, GLOBALG.A.P., LEAF Marque, Sedex/SMETA, Irish Organic
+Association and seasonal-worker** audits at once. Because these schemes overlap
+heavily, every
 requirement is **tagged with the schemes it satisfies** — so you prepare the
 evidence once and it counts toward every applicable audit ("prepare once,
 comply many").
