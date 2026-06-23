@@ -362,58 +362,95 @@ const AUDIT_STAT = {
 };
 const AUDIT_STAT_ORDER = ["not_started", "in_progress", "ready", "na"];
 
-// Scheme templates. `auto` links a requirement to live PeopleTrack data so it
-// self-verifies. Add new schemes (Red Tractor, LEAF, IOA) as sibling keys.
-const AUDIT_SCHEMES = {
-  sedex: {
-    name: "Sedex / SMETA",
-    fullName: "SMETA — Sedex Members Ethical Trade Audit (4-Pillar)",
-    color: "#8b5cf6",
-    sections: [
-      { id: "labour", name: "Pillar 1 · Labour Standards", items: [
-        { id: "mgmt", req: "Management systems & code implementation", guidance: "Documented ethical trade policy, responsibilities assigned, and the ETI Base Code communicated to workers." },
-        { id: "rtw", req: "Worker records & right-to-work documentation on file", guidance: "Each worker has a complete record with identity / right-to-work checks.", auto: "onboarding" },
-        { id: "freely", req: "Employment is freely chosen", guidance: "No forced, bonded or involuntary labour; no withheld documents or deposits." },
-        { id: "foa", req: "Freedom of association & collective bargaining", guidance: "Workers may join (or not) a union and raise concerns without fear." },
-        { id: "contracts", req: "Written terms of employment issued and signed", guidance: "All workers have signed contracts in a language they understand.", auto: "contracts" },
-        { id: "wages", req: "Living wages are paid", guidance: "Pay meets or exceeds the legal/industry minimum; payslips provided." },
-        { id: "hours", req: "Working hours are not excessive", guidance: "Hours comply with law; accurate time records kept; rest days given." },
-        { id: "discrim", req: "No discrimination is practised", guidance: "Hiring, pay and treatment are free from discrimination." },
-        { id: "regular", req: "Regular employment is provided", guidance: "Obligations to workers are not avoided through labour-only contracting." },
-        { id: "harsh", req: "No harsh or inhumane treatment", guidance: "No physical/verbal abuse; grievance procedure in place." },
-        { id: "induction", req: "Worker induction & training records complete", guidance: "All workers inducted and have reviewed assigned SOPs.", auto: "sops" },
-        { id: "labour_providers", req: "Sub-contracting, homeworking & labour providers controlled", guidance: "Licensed labour providers (GLAA) used; agency workers documented." },
-      ]},
-      { id: "hs", name: "Pillar 2 · Health & Safety", items: [
-        { id: "hs_policy", req: "Health & Safety policy and risk assessments in place", guidance: "Current written H&S policy and task/area risk assessments." },
-        { id: "hs_training", req: "H&S induction & training completed by all workers", guidance: "Workers trained on safety SOPs relevant to their role.", auto: "sops" },
-        { id: "first_aid", req: "First aid provision & accident records", guidance: "Trained first aiders, accident book maintained, RIDDOR awareness." },
-        { id: "ppe", req: "Machinery guarding, PPE & chemical safety", guidance: "PPE issued, COSHH assessments, safe machinery operation." },
-        { id: "welfare", req: "Welfare facilities & worker accommodation", guidance: "Adequate toilets, rest areas, drinking water; accommodation meets standards." },
-      ]},
-      { id: "env", name: "Pillar 3 · Environment", items: [
-        { id: "env_permits", req: "Environmental permits & waste management", guidance: "Required permits held; waste segregated and disposed of legally." },
-        { id: "chemicals", req: "Pesticide / chemical storage & handling", guidance: "Secure storage, application records, trained operators." },
-      ]},
-      { id: "ethics", name: "Pillar 4 · Business Ethics", items: [
-        { id: "bribery", req: "Anti-bribery & corruption policy", guidance: "Policy communicated; gifts/hospitality controls in place." },
-        { id: "grievance", req: "Grievance & whistleblowing procedure", guidance: "Confidential route for workers to raise concerns, with records." },
-      ]},
-    ],
-  },
+// The assurance schemes this app helps you prepare for. Each requirement in the
+// unified framework is tagged with the schemes it satisfies, so evidence is
+// gathered ONCE and counts toward every applicable audit ("prepare once,
+// comply many"). Add a new scheme here, then tag the relevant requirements.
+const AUDIT_SCHEME_TAGS = {
+  red_tractor: { name: "Red Tractor",     short: "RT",    color: "#e11d48" },
+  leaf:        { name: "LEAF Marque",     short: "LEAF",  color: "#16a34a" },
+  sedex:       { name: "Sedex / SMETA",   short: "SMETA", color: "#8b5cf6" },
+  ioa:         { name: "Irish Organic",   short: "IOA",   color: "#f59e0b" },
+  seasonal:    { name: "Seasonal Worker", short: "SW",    color: "#3b82f6" },
 };
 
-// Build a fresh audit item-list from a scheme template.
-function buildAuditItems(schemeKey) {
-  const scheme = AUDIT_SCHEMES[schemeKey];
-  if (!scheme) return [];
+// One unified compliance framework covering all schemes. Categories group
+// related controls; `schemes` lists which audits each control satisfies and
+// `auto` links it to live PeopleTrack data so it self-verifies.
+const UNIFIED_FRAMEWORK = [
+  { id: "mgmt", name: "Business & Management Systems", items: [
+    { id: "registration", req: "Scheme registration & valid certificates held", guidance: "Current membership/certificates for each scheme audited.", schemes: ["red_tractor", "leaf", "sedex", "ioa"] },
+    { id: "policies", req: "Documented policies & responsibilities assigned", guidance: "Written policies (quality, ethical, environmental) with named owners.", schemes: ["red_tractor", "leaf", "sedex", "ioa", "seasonal"] },
+    { id: "records", req: "Document & record control kept for required period", guidance: "Records retained, version-controlled and retrievable on request.", schemes: ["red_tractor", "leaf", "sedex", "ioa"] },
+    { id: "internal_audit", req: "Internal audit / self-assessment completed", guidance: "Documented internal review against the standard before the external audit.", schemes: ["red_tractor", "leaf", "sedex"] },
+    { id: "traceability", req: "Traceability & mass-balance records", guidance: "Inputs to outputs traceable; quantities reconcile.", schemes: ["red_tractor", "leaf", "ioa"] },
+    { id: "recall", req: "Product recall / withdrawal procedure tested", guidance: "Documented procedure with a recorded test/mock recall.", schemes: ["red_tractor", "leaf"] },
+  ]},
+  { id: "labour", name: "Worker Welfare & Labour Standards", items: [
+    { id: "rtw", req: "Worker records & right-to-work documentation on file", guidance: "Each worker has a complete record with identity / right-to-work checks.", schemes: ["red_tractor", "sedex", "seasonal", "leaf"], auto: "onboarding" },
+    { id: "contracts", req: "Written terms of employment issued and signed", guidance: "All workers have signed contracts in a language they understand.", schemes: ["red_tractor", "sedex", "seasonal"], auto: "contracts" },
+    { id: "freely", req: "Employment is freely chosen (no forced/bonded labour)", guidance: "No withheld documents, deposits, or debt bondage.", schemes: ["sedex", "seasonal", "red_tractor"] },
+    { id: "wages", req: "Wages meet legal minimum & payslips provided", guidance: "Pay at/above NMW/AWB; itemised payslips; no unlawful deductions.", schemes: ["sedex", "seasonal", "red_tractor"] },
+    { id: "hours", req: "Working hours recorded & within limits; rest breaks", guidance: "Accurate time records; legal hours; rest days and breaks given.", schemes: ["sedex", "seasonal", "red_tractor"] },
+    { id: "child", req: "No child or underage labour", guidance: "Age verification on file; young-worker risk assessments where relevant.", schemes: ["sedex", "seasonal", "red_tractor"] },
+    { id: "discrim", req: "No discrimination; equal treatment", guidance: "Fair recruitment, pay and treatment regardless of protected characteristics.", schemes: ["sedex", "seasonal"] },
+    { id: "foa", req: "Freedom of association respected", guidance: "Workers may join (or not) a union and raise concerns without fear.", schemes: ["sedex", "seasonal"] },
+    { id: "grievance", req: "Grievance & whistleblowing procedure", guidance: "Confidential route for workers to raise concerns, with records.", schemes: ["sedex", "seasonal", "red_tractor"] },
+    { id: "labour_providers", req: "Licensed labour providers (GLAA) used & checked", guidance: "GLAA licence verified; agency/gangmaster workers documented.", schemes: ["sedex", "seasonal", "red_tractor"] },
+    { id: "accommodation", req: "Worker accommodation meets standards", guidance: "Where provided, accommodation is licensed, safe and fairly charged.", schemes: ["sedex", "seasonal", "red_tractor"] },
+  ]},
+  { id: "training", name: "Training & Competence", items: [
+    { id: "induction", req: "Worker induction completed & recorded", guidance: "All workers inducted and have reviewed assigned SOPs.", schemes: ["red_tractor", "leaf", "sedex", "seasonal", "ioa"], auto: "sops" },
+    { id: "role_training", req: "Role-specific & refresher training records", guidance: "Training matrix kept up to date with refreshers.", schemes: ["red_tractor", "leaf", "sedex"], auto: "sops" },
+    { id: "operators", req: "Trained/certified operators for machinery & spraying", guidance: "PA certificates, forklift/telehandler tickets, etc. on file.", schemes: ["red_tractor", "leaf", "ioa"] },
+  ]},
+  { id: "hs", name: "Health & Safety", items: [
+    { id: "hs_policy", req: "H&S policy and risk assessments current", guidance: "Written H&S policy and task/area risk assessments reviewed annually.", schemes: ["red_tractor", "leaf", "sedex", "seasonal"] },
+    { id: "hs_training", req: "H&S training completed by all workers", guidance: "Workers trained on safety SOPs relevant to their role.", schemes: ["red_tractor", "sedex", "seasonal"], auto: "sops" },
+    { id: "first_aid", req: "First aid provision & accident records (RIDDOR)", guidance: "Trained first aiders, accident book maintained, RIDDOR awareness.", schemes: ["red_tractor", "sedex", "seasonal"] },
+    { id: "ppe", req: "PPE issued & machinery guarded", guidance: "PPE provided and recorded; guarding and safe operation in place.", schemes: ["red_tractor", "sedex", "seasonal"] },
+    { id: "welfare", req: "Welfare facilities (toilets, water, rest areas)", guidance: "Adequate, clean welfare facilities accessible to all workers.", schemes: ["red_tractor", "sedex", "seasonal"] },
+  ]},
+  { id: "hygiene", name: "Food Safety & Hygiene", items: [
+    { id: "hyg_policy", req: "Hygiene policy & personal hygiene rules", guidance: "Documented hygiene rules; handwashing; illness reporting.", schemes: ["red_tractor", "leaf"] },
+    { id: "harvest_hyg", req: "Harvest & packing hygiene controls", guidance: "Clean equipment, contamination controls, glass/plastic policy.", schemes: ["red_tractor", "leaf"] },
+    { id: "water_test", req: "Water testing for irrigation / washing", guidance: "Risk assessment and microbiological testing of water sources.", schemes: ["red_tractor", "leaf"] },
+    { id: "pest", req: "Pest control programme", guidance: "Monitoring and control records for stores and packhouses.", schemes: ["red_tractor", "leaf"] },
+  ]},
+  { id: "crop", name: "Crop Protection & Inputs", items: [
+    { id: "ppp_store", req: "Pesticide / PPP secure storage & inventory", guidance: "Locked, bunded store; up-to-date chemical inventory.", schemes: ["red_tractor", "leaf", "ioa"] },
+    { id: "spray_records", req: "Spray application records & LERAPs", guidance: "Records of product, rate, date, operator, buffer zones.", schemes: ["red_tractor", "leaf"] },
+    { id: "sprayer_test", req: "Sprayer calibration & testing (NSTS)", guidance: "Calibration records and valid NSTS test certificate.", schemes: ["red_tractor", "leaf"] },
+    { id: "nutrient", req: "Fertiliser / nutrient management plan", guidance: "Nutrient plan and application records; NVZ compliance if applicable.", schemes: ["red_tractor", "leaf", "ioa"] },
+    { id: "organic_inputs", req: "Only approved (organic) inputs used", guidance: "All inputs permitted under the organic standard, with proof.", schemes: ["ioa"] },
+  ]},
+  { id: "env", name: "Environment & Sustainability", items: [
+    { id: "waste", req: "Waste management & disposal records", guidance: "Waste segregated; licensed carriers; transfer notes kept.", schemes: ["leaf", "sedex", "ioa", "red_tractor"] },
+    { id: "water_energy", req: "Water & energy use management plan", guidance: "Monitoring and reduction measures for water and energy.", schemes: ["leaf", "sedex"] },
+    { id: "ifm", req: "Integrated Farm Management / biodiversity plan", guidance: "IFM plan covering soil, landscape and biodiversity.", schemes: ["leaf"] },
+    { id: "pollution", req: "Pollution prevention (fuel, slurry, runoff)", guidance: "Bunded fuel, slurry storage, runoff controls in place.", schemes: ["leaf", "red_tractor", "ioa"] },
+  ]},
+  { id: "organic", name: "Organic Integrity", items: [
+    { id: "org_cert", req: "Valid organic certification & licence", guidance: "Current IOA licence and certificate for all organic land/products.", schemes: ["ioa"] },
+    { id: "no_prohibited", req: "No prohibited substances; buffer zones maintained", guidance: "No banned inputs; buffer zones from conventional land documented.", schemes: ["ioa"] },
+    { id: "separation", req: "Separation & segregation of organic / non-organic", guidance: "Clear separation in storage, handling and records.", schemes: ["ioa"] },
+    { id: "org_trail", req: "Organic audit trail & mass balance", guidance: "Input/output reconciliation proving organic status throughout.", schemes: ["ioa"] },
+  ]},
+  { id: "ethics", name: "Business Ethics", items: [
+    { id: "bribery", req: "Anti-bribery & corruption policy", guidance: "Policy communicated; gifts/hospitality controls in place.", schemes: ["sedex"] },
+    { id: "due_diligence", req: "Ethical trading / supply-chain due diligence", guidance: "Suppliers assessed for labour and ethical risks.", schemes: ["sedex"] },
+  ]},
+];
+
+// Build a fresh audit item-list from the unified framework.
+function buildAuditItems() {
   const out = [];
-  scheme.sections.forEach(sec => {
-    sec.items.forEach(it => {
+  UNIFIED_FRAMEWORK.forEach(cat => {
+    cat.items.forEach(it => {
       out.push({
-        id: `${sec.id}_${it.id}`, section: sec.id, sectionName: sec.name,
+        id: `${cat.id}_${it.id}`, section: cat.id, sectionName: cat.name,
         req: it.req, guidance: it.guidance || "", auto: it.auto || null,
-        status: "not_started", notes: "", evidence: [],
+        schemes: it.schemes || [], status: "not_started", notes: "", evidence: [],
       });
     });
   });
@@ -474,18 +511,30 @@ function auditProgress(audit, ctx) {
   return Math.round((ready / counted.length) * 100);
 }
 
-// Export a single audit as a multi-sheet "audit pack" workbook for the auditor.
-function exportAuditPack(audit, ctx, emps, docs) {
-  const scheme = AUDIT_SCHEMES[audit.scheme];
+// Readiness for a single scheme = ready % across only that scheme's items.
+function auditSchemeProgress(audit, schemeKey, ctx) {
+  const items = (audit.items || []).filter(i => (i.schemes || []).includes(schemeKey));
+  const counted = items.filter(i => auditItemStatus(i, ctx) !== "na");
+  if (!counted.length) return null;
+  const ready = counted.filter(i => auditItemStatus(i, ctx) === "ready").length;
+  return { pct: Math.round((ready / counted.length) * 100), ready, total: counted.length };
+}
+
+// Export an audit as a multi-sheet "audit pack" workbook for the auditor.
+// `scope` is "all" or a scheme key, in which case only that scheme's items export.
+function exportAuditPack(audit, ctx, emps, docs, scope = "all") {
   const wb = XLSX.utils.book_new();
-  const items = audit.items || [];
+  const scopeName = scope === "all" ? "All schemes" : (AUDIT_SCHEME_TAGS[scope]?.name || scope);
+  const items = (audit.items || []).filter(i => scope === "all" || (i.schemes || []).includes(scope));
   const counts = AUDIT_STAT_ORDER.reduce((m, k) => { m[k] = 0; return m; }, {});
   items.forEach(i => { counts[auditItemStatus(i, ctx)] = (counts[auditItemStatus(i, ctx)] || 0) + 1; });
+  const readyCount = items.filter(i => auditItemStatus(i, ctx) === "ready").length;
+  const countedCount = items.filter(i => auditItemStatus(i, ctx) !== "na").length;
   const summary = [
-    { Field: "Scheme", Value: scheme ? scheme.fullName : audit.scheme },
     { Field: "Audit Title", Value: audit.title },
+    { Field: "Scope", Value: scopeName },
     { Field: "Audit Date", Value: audit.auditDate || "Not scheduled" },
-    { Field: "Overall Readiness", Value: `${auditProgress(audit, ctx)}%` },
+    { Field: "Readiness", Value: `${countedCount ? Math.round((readyCount / countedCount) * 100) : 0}%` },
     { Field: "Items Ready", Value: counts.ready || 0 },
     { Field: "Items In Progress", Value: counts.in_progress || 0 },
     { Field: "Items Not Started", Value: counts.not_started || 0 },
@@ -495,12 +544,22 @@ function exportAuditPack(audit, ctx, emps, docs) {
   ];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summary), "Summary");
 
+  // Per-scheme coverage overview (only meaningful for a full export).
+  if (scope === "all") {
+    const cov = Object.entries(AUDIT_SCHEME_TAGS).map(([k, s]) => {
+      const p = auditSchemeProgress(audit, k, ctx);
+      return { Scheme: s.name, "Requirements": p ? p.total : 0, "Ready": p ? p.ready : 0, "Readiness": p ? `${p.pct}%` : "—" };
+    });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(cov), "Scheme Coverage");
+  }
+
   const checklist = items.map(i => {
     const ev = i.auto ? autoEvaluateAudit(i.auto, ctx.emps, ctx.docs, ctx.obSubs) : null;
     const evList = (i.evidence || []).map(e => e.type === "link" ? `${e.label || "Link"}: ${e.url}` : e.text).filter(Boolean);
     if (ev) evList.unshift(`Auto-verified (${ev.metric}): ${ev.detail}`);
     return {
-      Section: i.sectionName, Requirement: i.req,
+      Category: i.sectionName, Requirement: i.req,
+      "Applies To": (i.schemes || []).map(k => AUDIT_SCHEME_TAGS[k]?.name || k).join(", "),
       Status: (AUDIT_STAT[auditItemStatus(i, ctx)] || {}).label || "",
       "Auto-linked": i.auto ? "Yes" : "",
       Evidence: evList.join("  |  ") || "—",
@@ -523,7 +582,7 @@ function exportAuditPack(audit, ctx, emps, docs) {
   });
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(workerRows.length ? workerRows : [{ Note: "No active workers" }]), "Worker Evidence");
 
-  const safe = (audit.title || audit.scheme).replace(/[^a-z0-9]+/gi, "_");
+  const safe = `${audit.title || "Audit"}_${scope === "all" ? "All" : (AUDIT_SCHEME_TAGS[scope]?.short || scope)}`.replace(/[^a-z0-9]+/gi, "_");
   XLSX.writeFile(wb, `AuditPack_${safe}_${todayDate()}.xlsx`);
 }
 
@@ -856,8 +915,9 @@ export default function App() {
   const [obOpenDocId, setObOpenDocId] = useState(null); const [obReviewId, setObReviewId] = useState(null);
   const [showArchived, setShowArchived] = useState(false);
   const [selAuditId, setSelAuditId] = useState(null); const [showAddAudit, setShowAddAudit] = useState(false);
-  const [naScheme, setNaScheme] = useState("sedex"); const [naTitle, setNaTitle] = useState(""); const [naDate, setNaDate] = useState("");
-  const [auditFilterSec, setAuditFilterSec] = useState("all");
+  const [naTitle, setNaTitle] = useState(""); const [naDate, setNaDate] = useState("");
+  const [auditFilterSec, setAuditFilterSec] = useState("all"); const [auditFilterScheme, setAuditFilterScheme] = useState("all");
+  const [exportScope, setExportScope] = useState("all");
   const [evDraft, setEvDraft] = useState({ itemId: null, label: "", url: "" });
 
   // Auto-refresh data every 30 seconds so changes show up across devices
@@ -987,14 +1047,13 @@ export default function App() {
   // ── Audit handlers ──
   const auditCtx = { emps, docs, obSubs };
   const addAudit = async () => {
-    const scheme = AUDIT_SCHEMES[naScheme]; if (!scheme) return;
     const audit = {
-      id: "a" + Date.now(), scheme: naScheme,
-      title: naTitle.trim() || `${scheme.name} ${new Date().getFullYear()}`,
-      auditDate: naDate || "", status: "planning", items: buildAuditItems(naScheme),
+      id: "a" + Date.now(), scheme: "unified",
+      title: naTitle.trim() || `Compliance Audit ${new Date().getFullYear()}`,
+      auditDate: naDate || "", status: "planning", items: buildAuditItems(),
     };
     await saveAudit(audit);
-    setNaTitle(""); setNaDate(""); setNaScheme("sedex"); setShowAddAudit(false);
+    setNaTitle(""); setNaDate(""); setShowAddAudit(false);
     setSelAuditId(audit.id); setView("auditDetail");
   };
   const updateAuditItem = async (auditId, itemId, updates) => {
@@ -1385,23 +1444,24 @@ export default function App() {
         {/* ═══ AUDITS (Manager) ═══ */}
         {view === "audits" && (<div>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, flexWrap: "wrap", gap: 12 }}>
-            <div><h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>Audits</h2><p style={{ color: C.textMuted, fontSize: 13 }}>Assurance & ethical audit readiness</p></div>
+            <div><h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>Audits</h2><p style={{ color: C.textMuted, fontSize: 13 }}>One framework covering Red Tractor, LEAF, SMETA, Irish Organic & seasonal-worker audits</p></div>
             <button onClick={() => setShowAddAudit(true)} style={{ padding: "9px 18px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>+ New Audit</button>
           </div>
           <div style={{ padding: "10px 14px", borderRadius: 10, background: C.accentSoft, border: `1px solid ${C.border}`, color: C.textMuted, fontSize: 12.5, lineHeight: 1.6, marginBottom: 22 }}>
-            Build a checklist per scheme, attach evidence, and export an audit pack for the auditor. Items marked <span style={{ color: C.accent, fontWeight: 600 }}>Auto</span> verify themselves live from your worker records, signed contracts, SOP reviews and onboarding data.
+            <strong style={{ color: C.text }}>Prepare once, comply many.</strong> A single checklist where every requirement is tagged with the schemes it satisfies. Fill in the evidence once — filter or export per scheme when each auditor arrives. Items marked <span style={{ color: C.accent, fontWeight: 600 }}>Auto</span> verify themselves live from your worker records, signed contracts, SOP reviews and onboarding data.
           </div>
           {audits.length === 0 ? (
             <div style={{ ...card, textAlign: "center", padding: 48, color: C.textMuted }}>No audits yet. Create one to start tracking readiness.</div>
           ) : (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 14 }}>
-              {audits.map(a => { const scheme = AUDIT_SCHEMES[a.scheme]; const pct = auditProgress(a, auditCtx); const attn = (a.items || []).filter(i => auditItemStatus(i, auditCtx) === "attention").length;
+              {audits.map(a => { const pct = auditProgress(a, auditCtx); const attn = (a.items || []).filter(i => auditItemStatus(i, auditCtx) === "attention").length;
                 return (<div key={a.id} onClick={() => { setSelAuditId(a.id); setView("auditDetail"); }} style={{ ...card, cursor: "pointer", transition: "border-color 0.2s" }} onMouseEnter={e => e.currentTarget.style.borderColor = C.accent} onMouseLeave={e => e.currentTarget.style.borderColor = C.border}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                    <div><Badge color={scheme?.color || C.accent} bg={C.accentSoft}>{scheme?.name || a.scheme}</Badge><div style={{ fontWeight: 700, fontSize: 15, margin: "10px 0 2px" }}>{a.title}</div><div style={{ color: C.textMuted, fontSize: 12 }}>{a.auditDate ? `📅 ${a.auditDate}` : "Date not set"}</div></div>
+                    <div style={{ flex: 1 }}><Badge color={C.accent} bg={C.accentSoft}>Combined</Badge><div style={{ fontWeight: 700, fontSize: 15, margin: "10px 0 2px" }}>{a.title}</div><div style={{ color: C.textMuted, fontSize: 12 }}>{a.auditDate ? `📅 ${a.auditDate}` : "Date not set"}</div></div>
                     <Ring percent={pct} size={48} stroke={4} color={pct === 100 ? C.green : pct >= 50 ? C.amber : C.red} />
                   </div>
-                  <div style={{ marginTop: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ marginTop: 12, display: "flex", flexWrap: "wrap", gap: 5 }}>{Object.entries(AUDIT_SCHEME_TAGS).map(([k, s]) => { const p = auditSchemeProgress(a, k, auditCtx); return (<span key={k} title={`${s.name}: ${p ? p.pct + "% ready" : "n/a"}`} style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 99, color: s.color, background: `${s.color}1a` }}>{s.short} {p ? `${p.pct}%` : "—"}</span>); })}</div>
+                  <div style={{ marginTop: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <span style={{ fontSize: 12, color: C.textMuted }}>{(a.items || []).length} requirements</span>
                     {attn > 0 ? <Badge color={C.red} bg={C.redSoft}>{attn} need attention</Badge> : <Badge color={C.green} bg={C.greenSoft}>{pct}% ready</Badge>}
                   </div>
@@ -1409,9 +1469,9 @@ export default function App() {
             </div>
           )}
           {showAddAudit && <Modal onClose={() => setShowAddAudit(false)}>
-            <h3 style={{ fontSize: 17, fontWeight: 700, marginBottom: 18 }}>New Audit</h3>
-            <div style={{ marginBottom: 12 }}><label style={lbl}>Scheme</label><div style={{ display: "flex", flexDirection: "column", gap: 8 }}>{Object.entries(AUDIT_SCHEMES).map(([k, s]) => (<button key={k} onClick={() => setNaScheme(k)} style={{ textAlign: "left", padding: "10px 12px", borderRadius: 8, border: `1px solid ${naScheme === k ? C.accent : C.border}`, background: naScheme === k ? C.accentSoft : "transparent", color: naScheme === k ? C.accent : C.text, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{s.name}<div style={{ fontSize: 11, color: C.textMuted, fontWeight: 400, marginTop: 2 }}>{s.fullName}</div></button>))}</div></div>
-            <div style={{ marginBottom: 12 }}><label style={lbl}>Audit Title</label><input value={naTitle} onChange={e => setNaTitle(e.target.value)} placeholder={`e.g. SMETA ${new Date().getFullYear()}`} style={inp} /></div>
+            <h3 style={{ fontSize: 17, fontWeight: 700, marginBottom: 6 }}>New Audit</h3>
+            <p style={{ color: C.textMuted, fontSize: 12.5, lineHeight: 1.6, marginBottom: 18 }}>Creates one combined checklist covering all schemes (Red Tractor, LEAF, SMETA, Irish Organic & seasonal-worker). You can filter and export per scheme afterwards.</p>
+            <div style={{ marginBottom: 12 }}><label style={lbl}>Audit Title</label><input value={naTitle} onChange={e => setNaTitle(e.target.value)} placeholder={`e.g. Compliance Audit ${new Date().getFullYear()}`} style={inp} /></div>
             <div style={{ marginBottom: 16 }}><label style={lbl}>Audit Date (optional)</label><input type="date" value={naDate} onChange={e => setNaDate(e.target.value)} style={inp} /></div>
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}><button onClick={() => setShowAddAudit(false)} style={{ padding: "9px 18px", borderRadius: 8, border: `1px solid ${C.border}`, background: "transparent", color: C.textMuted, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{t.cancel}</button><button onClick={addAudit} style={{ padding: "9px 22px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>Create</button></div>
           </Modal>}
@@ -1421,33 +1481,56 @@ export default function App() {
         {view === "auditDetail" && (() => {
           const audit = audits.find(a => a.id === selAuditId);
           if (!audit) return <div style={{ ...card, textAlign: "center", color: C.textMuted }}>Audit not found.<div style={{ marginTop: 12 }}><button onClick={() => setView("audits")} style={nb(false)}>← Back to Audits</button></div></div>;
-          const scheme = AUDIT_SCHEMES[audit.scheme]; const pct = auditProgress(audit, auditCtx);
-          const sections = scheme?.sections || [];
-          const shownItems = (audit.items || []).filter(i => auditFilterSec === "all" || i.section === auditFilterSec);
+          const pct = auditProgress(audit, auditCtx);
+          const sections = UNIFIED_FRAMEWORK;
+          const shownItems = (audit.items || []).filter(i =>
+            (auditFilterSec === "all" || i.section === auditFilterSec) &&
+            (auditFilterScheme === "all" || (i.schemes || []).includes(auditFilterScheme)));
           return (<div>
             <button onClick={() => setView("audits")} style={{ background: "transparent", border: "none", color: C.accent, cursor: "pointer", fontSize: 13, fontWeight: 600, marginBottom: 18, padding: 0 }}>← Back to Audits</button>
             <div style={{ ...card, marginBottom: 20 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16 }}>
                 <div style={{ flex: 1, minWidth: 220 }}>
-                  <Badge color={scheme?.color || C.accent} bg={C.accentSoft}>{scheme?.name || audit.scheme}</Badge>
+                  <Badge color={C.accent} bg={C.accentSoft}>Combined Audit</Badge>
                   <h2 style={{ fontSize: 22, fontWeight: 700, margin: "10px 0 4px" }}>{audit.title}</h2>
-                  <div style={{ color: C.textMuted, fontSize: 13 }}>{scheme?.fullName}{audit.auditDate ? ` · 📅 ${audit.auditDate}` : ""}</div>
+                  <div style={{ color: C.textMuted, fontSize: 13 }}>Covers all schemes{audit.auditDate ? ` · 📅 ${audit.auditDate}` : ""}</div>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
                   <div style={{ textAlign: "center" }}><Ring percent={pct} size={56} stroke={5} color={pct === 100 ? C.green : pct >= 50 ? C.amber : C.red} /><div style={{ fontSize: 11, color: C.textMuted, marginTop: 4 }}>{pct}% ready</div></div>
                 </div>
               </div>
-              <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
-                <button onClick={() => exportAuditPack(audit, auditCtx, emps, docs)} style={{ padding: "9px 16px", borderRadius: 8, border: "none", background: "rgba(34,197,94,0.15)", color: C.green, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>📊 Export Audit Pack</button>
+              {/* Per-scheme readiness summary — the "comply many" payoff */}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 8, marginTop: 16 }}>
+                {Object.entries(AUDIT_SCHEME_TAGS).map(([k, s]) => { const p = auditSchemeProgress(audit, k, auditCtx); const pp = p ? p.pct : 0; return (
+                  <div key={k} onClick={() => setAuditFilterScheme(auditFilterScheme === k ? "all" : k)} title="Filter by this scheme" style={{ padding: "10px 12px", borderRadius: 10, background: C.surfaceAlt, border: `1px solid ${auditFilterScheme === k ? s.color : C.border}`, cursor: "pointer" }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: s.color }}>{s.name}</div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
+                      <div style={{ flex: 1, height: 5, background: C.border, borderRadius: 99, overflow: "hidden" }}><div style={{ width: `${pp}%`, height: "100%", background: pp === 100 ? C.green : pp >= 50 ? C.amber : C.red, borderRadius: 99 }} /></div>
+                      <span style={{ fontSize: 10, fontFamily: "'JetBrains Mono', monospace", color: C.textMuted }}>{p ? `${p.ready}/${p.total}` : "—"}</span>
+                    </div>
+                  </div>); })}
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap", alignItems: "center" }}>
+                <select value={exportScope} onChange={e => setExportScope(e.target.value)} style={{ padding: "9px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surfaceAlt, color: C.text, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>
+                  <option value="all">All schemes</option>
+                  {Object.entries(AUDIT_SCHEME_TAGS).map(([k, s]) => <option key={k} value={k}>{s.name}</option>)}
+                </select>
+                <button onClick={() => exportAuditPack(audit, auditCtx, emps, docs, exportScope)} style={{ padding: "9px 16px", borderRadius: 8, border: "none", background: "rgba(34,197,94,0.15)", color: C.green, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>📊 Export Audit Pack</button>
                 <select value={audit.status} onChange={e => saveAudit({ ...audit, status: e.target.value })} style={{ padding: "9px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surfaceAlt, color: C.text, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>
                   <option value="planning">Planning</option><option value="in_progress">In Progress</option><option value="complete">Complete</option>
                 </select>
                 <button onClick={() => { if (window.confirm(`Delete audit "${audit.title}"?`)) removeAudit(audit.id); }} style={{ marginLeft: "auto", padding: "9px 14px", borderRadius: 8, border: "none", background: C.redSoft, color: C.red, fontWeight: 600, fontSize: 12, cursor: "pointer" }}>Delete</button>
               </div>
             </div>
-            <div style={{ display: "flex", gap: 6, marginBottom: 18, flexWrap: "wrap" }}>
-              <button onClick={() => setAuditFilterSec("all")} style={{ ...nb(auditFilterSec === "all"), padding: "6px 12px", fontSize: 12 }}>All</button>
-              {sections.map(s => (<button key={s.id} onClick={() => setAuditFilterSec(s.id)} style={{ ...nb(auditFilterSec === s.id), padding: "6px 12px", fontSize: 12 }}>{s.name.replace(/^Pillar \d+ · /, "")}</button>))}
+            <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
+              <span style={{ fontSize: 11, color: C.textDim, textTransform: "uppercase", letterSpacing: 0.6, fontWeight: 600, marginRight: 4 }}>Scheme:</span>
+              <button onClick={() => setAuditFilterScheme("all")} style={{ ...nb(auditFilterScheme === "all"), padding: "5px 11px", fontSize: 12 }}>All</button>
+              {Object.entries(AUDIT_SCHEME_TAGS).map(([k, s]) => (<button key={k} onClick={() => setAuditFilterScheme(k)} style={{ padding: "5px 11px", borderRadius: 8, border: "none", fontWeight: 600, fontSize: 12, cursor: "pointer", color: auditFilterScheme === k ? "#fff" : s.color, background: auditFilterScheme === k ? s.color : `${s.color}1a` }}>{s.name}</button>))}
+            </div>
+            <div style={{ display: "flex", gap: 6, marginBottom: 18, flexWrap: "wrap", alignItems: "center" }}>
+              <span style={{ fontSize: 11, color: C.textDim, textTransform: "uppercase", letterSpacing: 0.6, fontWeight: 600, marginRight: 4 }}>Category:</span>
+              <button onClick={() => setAuditFilterSec("all")} style={{ ...nb(auditFilterSec === "all"), padding: "5px 11px", fontSize: 12 }}>All</button>
+              {sections.map(s => (<button key={s.id} onClick={() => setAuditFilterSec(s.id)} style={{ ...nb(auditFilterSec === s.id), padding: "5px 11px", fontSize: 12 }}>{s.name}</button>))}
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {shownItems.map(item => {
@@ -1457,7 +1540,8 @@ export default function App() {
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
                     <div style={{ flex: 1, minWidth: 220 }}>
                       <div style={{ fontWeight: 600, fontSize: 14 }}>{item.req}{item.auto && <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, color: C.accent, background: C.accentSoft, padding: "2px 7px", borderRadius: 99, textTransform: "uppercase", letterSpacing: 0.5 }}>Auto</span>}</div>
-                      {item.guidance && <div style={{ fontSize: 12, color: C.textMuted, marginTop: 4, lineHeight: 1.55 }}>{item.guidance}</div>}
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 6 }}>{(item.schemes || []).map(k => { const s = AUDIT_SCHEME_TAGS[k]; if (!s) return null; return <span key={k} title={s.name} style={{ fontSize: 9.5, fontWeight: 700, padding: "1px 6px", borderRadius: 99, color: s.color, background: `${s.color}1a` }}>{s.short}</span>; })}</div>
+                      {item.guidance && <div style={{ fontSize: 12, color: C.textMuted, marginTop: 6, lineHeight: 1.55 }}>{item.guidance}</div>}
                       {ev && <div style={{ fontSize: 12, color: st.color, marginTop: 6, fontWeight: 500 }}>● {ev.detail}</div>}
                     </div>
                     {item.auto
