@@ -460,6 +460,62 @@ function buildAuditItems() {
   return out;
 }
 
+// ── OneDrive evidence folders ──
+// Each requirement maps to a dedicated OneDrive folder under this base, so the
+// "Evidence folder" button on a requirement opens exactly the right place to
+// file (or read) its documents. The folder tree is created once in OneDrive
+// (see Create-Audit-Evidence-Folders.bat); names here must match it exactly.
+const AUDIT_EVIDENCE_BASE = "https://mcardlemarketingltd-my.sharepoint.com/personal/admin_mcardlemarketingltd_onmicrosoft_com/Documents/Audit Records/Audit Evidence";
+const AUDIT_FOLDER = {
+  mgmt_registration: "01 Business & Management Systems/01 Scheme registration & certificates",
+  mgmt_policies: "01 Business & Management Systems/02 Policies",
+  mgmt_records: "01 Business & Management Systems/03 Document & record control",
+  mgmt_internal_audit: "01 Business & Management Systems/04 Internal audit",
+  mgmt_traceability: "01 Business & Management Systems/05 Traceability & mass balance",
+  mgmt_recall: "01 Business & Management Systems/06 Product recall",
+  labour_rtw: "02 Worker Welfare & Labour/01 Right to work",
+  labour_contracts: "02 Worker Welfare & Labour/02 Contracts",
+  labour_freely: "02 Worker Welfare & Labour/03 Freely chosen employment",
+  labour_wages: "02 Worker Welfare & Labour/04 Wages & payslips",
+  labour_hours: "02 Worker Welfare & Labour/05 Working hours",
+  labour_child: "02 Worker Welfare & Labour/06 No child labour",
+  labour_discrim: "02 Worker Welfare & Labour/07 No discrimination",
+  labour_foa: "02 Worker Welfare & Labour/08 Freedom of association",
+  labour_grievance: "02 Worker Welfare & Labour/09 Grievance & whistleblowing",
+  labour_labour_providers: "02 Worker Welfare & Labour/10 Labour providers (GLAA)",
+  labour_accommodation: "02 Worker Welfare & Labour/11 Accommodation",
+  training_induction: "03 Training & Competence/01 Induction",
+  training_role_training: "03 Training & Competence/02 Role & refresher training",
+  training_operators: "03 Training & Competence/03 Operator certificates",
+  hs_hs_policy: "04 Health & Safety/01 H&S policy & risk assessments",
+  hs_hs_training: "04 Health & Safety/02 H&S training",
+  hs_first_aid: "04 Health & Safety/03 First aid & accidents",
+  hs_ppe: "04 Health & Safety/04 PPE & machinery",
+  hs_welfare: "04 Health & Safety/05 Welfare facilities",
+  hygiene_hyg_policy: "05 Food Safety & Hygiene/01 Hygiene policy",
+  hygiene_harvest_hyg: "05 Food Safety & Hygiene/02 Harvest & packing hygiene",
+  hygiene_water_test: "05 Food Safety & Hygiene/03 Water testing",
+  hygiene_residue: "05 Food Safety & Hygiene/04 Residue (MRL) testing",
+  hygiene_pest: "05 Food Safety & Hygiene/05 Pest control",
+  crop_ppp_store: "06 Crop Protection & Inputs/01 Pesticide storage & inventory",
+  crop_spray_records: "06 Crop Protection & Inputs/02 Spray records",
+  crop_sprayer_test: "06 Crop Protection & Inputs/03 Sprayer calibration (NSTS)",
+  crop_ipm: "06 Crop Protection & Inputs/04 IPM",
+  crop_nutrient: "06 Crop Protection & Inputs/05 Nutrient management",
+  crop_organic_inputs: "06 Crop Protection & Inputs/06 Approved organic inputs",
+  env_waste: "07 Environment & Sustainability/01 Waste management",
+  env_water_energy: "07 Environment & Sustainability/02 Water & energy",
+  env_ifm: "07 Environment & Sustainability/03 IFM & biodiversity",
+  env_pollution: "07 Environment & Sustainability/04 Pollution prevention",
+  organic_org_cert: "08 Organic Integrity/01 Organic certification",
+  organic_no_prohibited: "08 Organic Integrity/02 No prohibited substances",
+  organic_separation: "08 Organic Integrity/03 Separation & segregation",
+  organic_org_trail: "08 Organic Integrity/04 Organic audit trail",
+  ethics_bribery: "09 Business Ethics/01 Anti-bribery",
+  ethics_due_diligence: "09 Business Ethics/02 Supply-chain due diligence",
+};
+const auditFolderUrl = (itemId) => AUDIT_FOLDER[itemId] ? encodeURI(`${AUDIT_EVIDENCE_BASE}/${AUDIT_FOLDER[itemId]}`) : null;
+
 // Live evaluation of an `auto` item against current worker/document data.
 // Returns { status, detail, metric } or null when there is nothing to verify.
 function autoEvaluateAudit(auto, emps, docs, obSubs) {
@@ -1552,6 +1608,7 @@ export default function App() {
                       : <button onClick={() => cycleAuditStatus(audit.id, item)} title="Click to change status" style={{ border: "none", cursor: "pointer", padding: "4px 12px", borderRadius: 99, fontSize: 11, fontWeight: 600, color: st.color, background: st.bg }}>{st.label} ▾</button>}
                   </div>
                   <div style={{ marginTop: 12 }}>
+                    {auditFolderUrl(item.id) && <a href={auditFolderUrl(item.id)} target="_blank" rel="noopener noreferrer" title="Open this requirement's OneDrive evidence folder" style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, color: C.accent, textDecoration: "none", background: C.accentSoft, border: `1px solid ${C.border}`, padding: "6px 11px", borderRadius: 7, marginBottom: 8, marginRight: 8 }}>📁 Evidence folder ↗</a>}
                     {(item.evidence || []).length > 0 && <div style={{ display: "flex", flexDirection: "column", gap: 5, marginBottom: 8 }}>{(item.evidence || []).map((e, idx) => (<div key={idx} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, background: C.surfaceAlt, borderRadius: 7, padding: "6px 10px" }}><span style={{ flex: 1 }}>{e.type === "link" ? <a href={e.url} target="_blank" rel="noopener noreferrer" style={{ color: C.accent, textDecoration: "none" }}>🔗 {e.label} ↗</a> : <span style={{ color: C.text }}>📝 {e.text}</span>}</span><button onClick={() => removeAuditEvidence(audit.id, item.id, idx)} style={{ background: "transparent", border: "none", color: C.textDim, cursor: "pointer", fontSize: 14 }}>✕</button></div>))}</div>}
                     {evDraft.itemId === item.id ? (
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
