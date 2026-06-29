@@ -6,4 +6,4 @@ dist/
 # One-off concierge seed artifacts (not part of the app)
 seed_audit.mjs
 seed_audit.html
-Create-Audit-Evidence-Folders.bat
+*.bat
