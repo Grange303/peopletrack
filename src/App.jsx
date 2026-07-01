@@ -154,35 +154,6 @@ function useOnboardingSubs() {
   return { subs, loaded, saveSub, refresh: fetch_ };
 }
 
-// ── Audit hooks ──
-function useAudits() {
-  const [audits, setAudits] = useState([]);
-  const [loaded, setLoaded] = useState(false);
-  const fetch_ = useCallback(async () => {
-    const { data } = await supabase.from("audits").select("*");
-    if (data) setAudits(data.map(a => ({
-      id: a.id, scheme: a.scheme, title: a.title,
-      auditDate: a.audit_date || "", status: a.status || "planning",
-      items: a.items || [], createdAt: a.created_at
-    })).sort((x, y) => (y.createdAt || "").localeCompare(x.createdAt || "")));
-    setLoaded(true);
-  }, []);
-  useEffect(() => { fetch_(); }, [fetch_]);
-  const saveAudit = useCallback(async (a) => {
-    await supabase.from("audits").upsert({
-      id: a.id, scheme: a.scheme, title: a.title,
-      audit_date: a.auditDate || null, status: a.status || "planning",
-      items: a.items || []
-    });
-    await fetch_();
-  }, [fetch_]);
-  const deleteAudit = useCallback(async (id) => {
-    await supabase.from("audits").delete().eq("id", id);
-    await fetch_();
-  }, [fetch_]);
-  return { audits, loaded, saveAudit, deleteAudit, refresh: fetch_ };
-}
-
 // Flagging: check questionnaire answers for "yes" on flagged questions
 function computeFlags(doc, answers) {
   if (doc.kind !== "questionnaire") return [];
@@ -351,309 +322,61 @@ function exportXLS(emps, docs, t) {
   XLSX.writeFile(wb, `PeopleTrack_${todayDate()}.xlsx`);
 }
 
-// ══════════════ AUDIT MODULE ══════════════
-// Status vocabulary used across audit checklist items.
-const AUDIT_STAT = {
-  not_started: { label: "Not started", color: "#7d829a", bg: "rgba(125,130,154,0.12)" },
-  in_progress: { label: "In progress", color: "#eab308", bg: "rgba(234,179,8,0.1)" },
-  ready:       { label: "Ready",       color: "#22c55e", bg: "rgba(34,197,94,0.1)" },
-  attention:   { label: "Attention",   color: "#ef4444", bg: "rgba(239,68,68,0.1)" },
-  na:          { label: "N/A",         color: "#4a4f65", bg: "rgba(74,79,101,0.12)" },
-};
-const AUDIT_STAT_ORDER = ["not_started", "in_progress", "ready", "na"];
-
-// The assurance schemes this app helps you prepare for. Each requirement in the
-// unified framework is tagged with the schemes it satisfies, so evidence is
-// gathered ONCE and counts toward every applicable audit ("prepare once,
-// comply many"). Add a new scheme here, then tag the relevant requirements.
-const AUDIT_SCHEME_TAGS = {
-  red_tractor: { name: "Red Tractor",     short: "RT",    color: "#e11d48" },
-  globalgap:   { name: "GLOBALG.A.P.",    short: "GG",    color: "#0891b2" },
-  leaf:        { name: "LEAF Marque",     short: "LEAF",  color: "#16a34a" },
-  sedex:       { name: "Sedex / SMETA",   short: "SMETA", color: "#8b5cf6" },
-  ioa:         { name: "Irish Organic",   short: "IOA",   color: "#f59e0b" },
-  seasonal:    { name: "Seasonal Worker", short: "SW",    color: "#3b82f6" },
-};
-
-// One unified compliance framework covering all schemes. Categories group
-// related controls; `schemes` lists which audits each control satisfies and
-// `auto` links it to live PeopleTrack data so it self-verifies.
-const UNIFIED_FRAMEWORK = [
-  { id: "mgmt", name: "Business & Management Systems", items: [
-    { id: "registration", req: "Scheme registration & valid certificates held", guidance: "Current membership/certificates for each scheme audited.", schemes: ["red_tractor", "globalgap", "leaf", "sedex", "ioa"] },
-    { id: "policies", req: "Documented policies & responsibilities assigned", guidance: "Written policies (quality, ethical, environmental) with named owners.", schemes: ["red_tractor", "globalgap", "leaf", "sedex", "ioa", "seasonal"] },
-    { id: "records", req: "Document & record control kept for required period", guidance: "Records retained, version-controlled and retrievable on request.", schemes: ["red_tractor", "globalgap", "leaf", "sedex", "ioa"] },
-    { id: "internal_audit", req: "Internal audit / self-assessment completed", guidance: "Documented internal review against the standard before the external audit.", schemes: ["red_tractor", "globalgap", "leaf", "sedex"] },
-    { id: "traceability", req: "Traceability & mass-balance records", guidance: "Inputs to outputs traceable; quantities reconcile.", schemes: ["red_tractor", "globalgap", "leaf", "ioa"] },
-    { id: "recall", req: "Product recall / withdrawal procedure tested", guidance: "Documented procedure with a recorded test/mock recall.", schemes: ["red_tractor", "globalgap", "leaf"] },
-  ]},
-  { id: "labour", name: "Worker Welfare & Labour Standards", items: [
-    { id: "rtw", req: "Worker records & right-to-work documentation on file", guidance: "Each worker has a complete record with identity / right-to-work checks.", schemes: ["red_tractor", "globalgap", "sedex", "seasonal", "leaf"], auto: "onboarding" },
-    { id: "contracts", req: "Written terms of employment issued and signed", guidance: "All workers have signed contracts in a language they understand.", schemes: ["red_tractor", "globalgap", "sedex", "seasonal"], auto: "contracts" },
-    { id: "freely", req: "Employment is freely chosen (no forced/bonded labour)", guidance: "No withheld documents, deposits, or debt bondage.", schemes: ["globalgap", "sedex", "seasonal", "red_tractor"] },
-    { id: "wages", req: "Wages meet legal minimum & payslips provided", guidance: "Pay at/above NMW/AWB; itemised payslips; no unlawful deductions.", schemes: ["globalgap", "sedex", "seasonal", "red_tractor"] },
-    { id: "hours", req: "Working hours recorded & within limits; rest breaks", guidance: "Accurate time records; legal hours; rest days and breaks given.", schemes: ["globalgap", "sedex", "seasonal", "red_tractor"] },
-    { id: "child", req: "No child or underage labour", guidance: "Age verification on file; young-worker risk assessments where relevant.", schemes: ["globalgap", "sedex", "seasonal", "red_tractor"] },
-    { id: "discrim", req: "No discrimination; equal treatment", guidance: "Fair recruitment, pay and treatment regardless of protected characteristics.", schemes: ["globalgap", "sedex", "seasonal"] },
-    { id: "foa", req: "Freedom of association respected", guidance: "Workers may join (or not) a union; an elected workers' representative (GRASP) raises concerns.", schemes: ["globalgap", "sedex", "seasonal"] },
-    { id: "grievance", req: "Grievance & whistleblowing procedure", guidance: "Confidential route for workers to raise concerns, with records.", schemes: ["globalgap", "sedex", "seasonal", "red_tractor"] },
-    { id: "labour_providers", req: "Licensed labour providers (GLAA) used & checked", guidance: "GLAA licence verified; agency/gangmaster workers documented.", schemes: ["globalgap", "sedex", "seasonal", "red_tractor"] },
-    { id: "accommodation", req: "Worker accommodation meets standards", guidance: "Where provided, accommodation is licensed, safe and fairly charged.", schemes: ["globalgap", "sedex", "seasonal", "red_tractor"] },
-  ]},
-  { id: "training", name: "Training & Competence", items: [
-    { id: "induction", req: "Worker induction completed & recorded", guidance: "All workers inducted and have reviewed assigned SOPs.", schemes: ["red_tractor", "globalgap", "leaf", "sedex", "seasonal", "ioa"], auto: "sops" },
-    { id: "role_training", req: "Role-specific & refresher training records", guidance: "Training matrix kept up to date with refreshers.", schemes: ["red_tractor", "globalgap", "leaf", "sedex"], auto: "sops" },
-    { id: "operators", req: "Trained/certified operators for machinery & spraying", guidance: "PA certificates, forklift/telehandler tickets, etc. on file.", schemes: ["red_tractor", "globalgap", "leaf", "ioa"] },
-  ]},
-  { id: "hs", name: "Health & Safety", items: [
-    { id: "hs_policy", req: "H&S policy and risk assessments current", guidance: "Written H&S policy and task/area risk assessments reviewed annually.", schemes: ["red_tractor", "globalgap", "leaf", "sedex", "seasonal"] },
-    { id: "hs_training", req: "H&S training completed by all workers", guidance: "Workers trained on safety SOPs relevant to their role.", schemes: ["red_tractor", "globalgap", "sedex", "seasonal"], auto: "sops" },
-    { id: "first_aid", req: "First aid provision & accident records (RIDDOR)", guidance: "Trained first aiders, accident book maintained, RIDDOR awareness.", schemes: ["red_tractor", "globalgap", "sedex", "seasonal"] },
-    { id: "ppe", req: "PPE issued & machinery guarded", guidance: "PPE provided and recorded; guarding and safe operation in place.", schemes: ["red_tractor", "globalgap", "sedex", "seasonal"] },
-    { id: "welfare", req: "Welfare facilities (toilets, water, rest areas)", guidance: "Adequate, clean welfare facilities accessible to all workers.", schemes: ["red_tractor", "globalgap", "sedex", "seasonal"] },
-  ]},
-  { id: "hygiene", name: "Food Safety & Hygiene", items: [
-    { id: "hyg_policy", req: "Hygiene policy, risk assessment & personal hygiene rules", guidance: "Documented hygiene risk assessment, rules, handwashing and illness reporting.", schemes: ["red_tractor", "globalgap", "leaf"] },
-    { id: "harvest_hyg", req: "Harvest & packing hygiene controls", guidance: "Clean equipment, contamination controls, glass/plastic policy.", schemes: ["red_tractor", "globalgap", "leaf"] },
-    { id: "water_test", req: "Water testing for irrigation / washing", guidance: "Risk assessment and microbiological testing of water sources.", schemes: ["red_tractor", "globalgap", "leaf"] },
-    { id: "residue", req: "Produce residue (MRL) testing & analysis", guidance: "Risk-based residue sampling; results within MRLs; lab accreditation on file.", schemes: ["globalgap", "red_tractor", "leaf"] },
-    { id: "pest", req: "Pest control programme", guidance: "Monitoring and control records for stores and packhouses.", schemes: ["red_tractor", "globalgap", "leaf"] },
-  ]},
-  { id: "crop", name: "Crop Protection & Inputs", items: [
-    { id: "ppp_store", req: "Pesticide / PPP secure storage & inventory", guidance: "Locked, bunded store; up-to-date chemical inventory.", schemes: ["red_tractor", "globalgap", "leaf", "ioa"] },
-    { id: "spray_records", req: "Spray application records & LERAPs", guidance: "Records of product, rate, date, operator, buffer zones.", schemes: ["red_tractor", "globalgap", "leaf"] },
-    { id: "sprayer_test", req: "Sprayer calibration & testing (NSTS)", guidance: "Calibration records and valid NSTS test certificate.", schemes: ["red_tractor", "globalgap", "leaf"] },
-    { id: "ipm", req: "Integrated Pest Management (IPM) records", guidance: "Evidence of prevention, monitoring and intervention decisions.", schemes: ["globalgap", "leaf", "red_tractor"] },
-    { id: "nutrient", req: "Fertiliser / nutrient management plan", guidance: "Nutrient plan and application records; NVZ compliance if applicable.", schemes: ["red_tractor", "globalgap", "leaf", "ioa"] },
-    { id: "organic_inputs", req: "Only approved (organic) inputs used", guidance: "All inputs permitted under the organic standard, with proof.", schemes: ["ioa"] },
-  ]},
-  { id: "env", name: "Environment & Sustainability", items: [
-    { id: "waste", req: "Waste management & disposal records", guidance: "Waste segregated; licensed carriers; transfer notes kept.", schemes: ["leaf", "globalgap", "sedex", "ioa", "red_tractor"] },
-    { id: "water_energy", req: "Water & energy use management plan", guidance: "Monitoring and reduction measures for water and energy.", schemes: ["leaf", "globalgap", "sedex"] },
-    { id: "ifm", req: "Integrated Farm Management / biodiversity plan", guidance: "IFM/conservation plan covering soil, landscape and biodiversity.", schemes: ["leaf", "globalgap"] },
-    { id: "pollution", req: "Pollution prevention (fuel, slurry, runoff)", guidance: "Bunded fuel, slurry storage, runoff controls in place.", schemes: ["leaf", "globalgap", "red_tractor", "ioa"] },
-  ]},
-  { id: "organic", name: "Organic Integrity", items: [
-    { id: "org_cert", req: "Valid organic certification & licence", guidance: "Current IOA licence and certificate for all organic land/products.", schemes: ["ioa"] },
-    { id: "no_prohibited", req: "No prohibited substances; buffer zones maintained", guidance: "No banned inputs; buffer zones from conventional land documented.", schemes: ["ioa"] },
-    { id: "separation", req: "Separation & segregation of organic / non-organic", guidance: "Clear separation in storage, handling and records.", schemes: ["ioa"] },
-    { id: "org_trail", req: "Organic audit trail & mass balance", guidance: "Input/output reconciliation proving organic status throughout.", schemes: ["ioa"] },
-  ]},
-  { id: "ethics", name: "Business Ethics", items: [
-    { id: "bribery", req: "Anti-bribery & corruption policy", guidance: "Policy communicated; gifts/hospitality controls in place.", schemes: ["sedex"] },
-    { id: "due_diligence", req: "Ethical trading / supply-chain due diligence", guidance: "Suppliers assessed for labour and ethical risks.", schemes: ["sedex"] },
-  ]},
-];
-
-// Build a fresh audit item-list from the unified framework.
-function buildAuditItems() {
-  const out = [];
-  UNIFIED_FRAMEWORK.forEach(cat => {
-    cat.items.forEach(it => {
-      out.push({
-        id: `${cat.id}_${it.id}`, section: cat.id, sectionName: cat.name,
-        req: it.req, guidance: it.guidance || "", auto: it.auto || null,
-        schemes: it.schemes || [], status: "not_started", notes: "", evidence: [],
-      });
-    });
-  });
-  return out;
-}
-
-// ── OneDrive evidence folders ──
-// Each requirement maps to a dedicated OneDrive folder under this base, so the
-// "Evidence folder" button on a requirement opens exactly the right place to
-// file (or read) its documents. The folder tree is created once in OneDrive
-// (see Create-Audit-Evidence-Folders.bat); names here must match it exactly.
-const AUDIT_EVIDENCE_BASE = "https://mcardlemarketingltd-my.sharepoint.com/personal/admin_mcardlemarketingltd_onmicrosoft_com/Documents/Audit Records/Audit Evidence";
-const AUDIT_FOLDER = {
-  mgmt_registration: "01 Business & Management Systems/01 Scheme registration & certificates",
-  mgmt_policies: "01 Business & Management Systems/02 Policies",
-  mgmt_records: "01 Business & Management Systems/03 Document & record control",
-  mgmt_internal_audit: "01 Business & Management Systems/04 Internal audit",
-  mgmt_traceability: "01 Business & Management Systems/05 Traceability & mass balance",
-  mgmt_recall: "01 Business & Management Systems/06 Product recall",
-  labour_rtw: "02 Worker Welfare & Labour/01 Right to work",
-  labour_contracts: "02 Worker Welfare & Labour/02 Contracts",
-  labour_freely: "02 Worker Welfare & Labour/03 Freely chosen employment",
-  labour_wages: "02 Worker Welfare & Labour/04 Wages & payslips",
-  labour_hours: "02 Worker Welfare & Labour/05 Working hours",
-  labour_child: "02 Worker Welfare & Labour/06 No child labour",
-  labour_discrim: "02 Worker Welfare & Labour/07 No discrimination",
-  labour_foa: "02 Worker Welfare & Labour/08 Freedom of association",
-  labour_grievance: "02 Worker Welfare & Labour/09 Grievance & whistleblowing",
-  labour_labour_providers: "02 Worker Welfare & Labour/10 Labour providers (GLAA)",
-  labour_accommodation: "02 Worker Welfare & Labour/11 Accommodation",
-  training_induction: "03 Training & Competence/01 Induction",
-  training_role_training: "03 Training & Competence/02 Role & refresher training",
-  training_operators: "03 Training & Competence/03 Operator certificates",
-  hs_hs_policy: "04 Health & Safety/01 H&S policy & risk assessments",
-  hs_hs_training: "04 Health & Safety/02 H&S training",
-  hs_first_aid: "04 Health & Safety/03 First aid & accidents",
-  hs_ppe: "04 Health & Safety/04 PPE & machinery",
-  hs_welfare: "04 Health & Safety/05 Welfare facilities",
-  hygiene_hyg_policy: "05 Food Safety & Hygiene/01 Hygiene policy",
-  hygiene_harvest_hyg: "05 Food Safety & Hygiene/02 Harvest & packing hygiene",
-  hygiene_water_test: "05 Food Safety & Hygiene/03 Water testing",
-  hygiene_residue: "05 Food Safety & Hygiene/04 Residue (MRL) testing",
-  hygiene_pest: "05 Food Safety & Hygiene/05 Pest control",
-  crop_ppp_store: "06 Crop Protection & Inputs/01 Pesticide storage & inventory",
-  crop_spray_records: "06 Crop Protection & Inputs/02 Spray records",
-  crop_sprayer_test: "06 Crop Protection & Inputs/03 Sprayer calibration (NSTS)",
-  crop_ipm: "06 Crop Protection & Inputs/04 IPM",
-  crop_nutrient: "06 Crop Protection & Inputs/05 Nutrient management",
-  crop_organic_inputs: "06 Crop Protection & Inputs/06 Approved organic inputs",
-  env_waste: "07 Environment & Sustainability/01 Waste management",
-  env_water_energy: "07 Environment & Sustainability/02 Water & energy",
-  env_ifm: "07 Environment & Sustainability/03 IFM & biodiversity",
-  env_pollution: "07 Environment & Sustainability/04 Pollution prevention",
-  organic_org_cert: "08 Organic Integrity/01 Organic certification",
-  organic_no_prohibited: "08 Organic Integrity/02 No prohibited substances",
-  organic_separation: "08 Organic Integrity/03 Separation & segregation",
-  organic_org_trail: "08 Organic Integrity/04 Organic audit trail",
-  ethics_bribery: "09 Business Ethics/01 Anti-bribery",
-  ethics_due_diligence: "09 Business Ethics/02 Supply-chain due diligence",
-};
-const auditFolderUrl = (itemId) => AUDIT_FOLDER[itemId] ? encodeURI(`${AUDIT_EVIDENCE_BASE}/${AUDIT_FOLDER[itemId]}`) : null;
-
-// Live evaluation of an `auto` item against current worker/document data.
-// Returns { status, detail, metric } or null when there is nothing to verify.
-function autoEvaluateAudit(auto, emps, docs, obSubs) {
-  const active = (emps || []).filter(e => !e.archived);
-  if (!active.length) return { status: "attention", detail: "No active workers on record.", metric: "0/0" };
-  if (auto === "contracts") {
-    const contracts = (docs || []).filter(d => d.type === "contract");
-    if (!contracts.length) return { status: "in_progress", detail: "No contracts have been set up yet.", metric: "0/0" };
-    const fully = active.filter(e => contracts
-      .filter(c => c.assignedTo?.includes("all") || c.assignedTo?.includes(e.id))
-      .every(c => { const chk = e.docChecks[c.id]; return chk && (chk.status === "signed" || chk.sig || chk.status === undefined); }));
-    const ok = fully.length === active.length;
-    return { status: ok ? "ready" : "attention", metric: `${fully.length}/${active.length}`,
-      detail: `${fully.length} of ${active.length} active workers have signed all assigned contracts.` };
-  }
-  if (auto === "sops") {
-    const sops = (docs || []).filter(d => d.type === "sop");
-    if (!sops.length) return { status: "in_progress", detail: "No SOPs / training documents set up yet.", metric: "0/0" };
-    const fully = active.filter(e => sops
-      .filter(s => s.assignedTo?.includes("all") || s.assignedTo?.includes(e.id))
-      .every(s => !!e.docChecks[s.id]));
-    const ok = fully.length === active.length;
-    return { status: ok ? "ready" : "attention", metric: `${fully.length}/${active.length}`,
-      detail: `${fully.length} of ${active.length} active workers have reviewed all assigned SOPs / training.` };
-  }
-  if (auto === "onboarding") {
-    const withRecord = active.filter(e => (obSubs || []).some(s => s.employee_id === e.id));
-    const flagged = (obSubs || []).filter(s => s.status === "flagged").length;
-    if (!withRecord.length) return { status: "in_progress", detail: "No onboarding records captured yet.", metric: `0/${active.length}` };
-    const ok = withRecord.length === active.length && flagged === 0;
-    return { status: ok ? "ready" : "attention", metric: `${withRecord.length}/${active.length}`,
-      detail: `${withRecord.length} of ${active.length} workers have onboarding records${flagged ? ` · ${flagged} flagged for review` : ""}.` };
-  }
-  return null;
-}
-
-// Effective status of an item: auto items reflect live data unless marked N/A.
-function auditItemStatus(item, ctx) {
-  if (item.status === "na") return "na";
-  if (item.auto) {
-    const ev = autoEvaluateAudit(item.auto, ctx.emps, ctx.docs, ctx.obSubs);
-    if (ev) return ev.status;
-  }
-  return item.status || "not_started";
-}
-
-function auditProgress(audit, ctx) {
-  const items = audit.items || [];
-  const counted = items.filter(i => auditItemStatus(i, ctx) !== "na");
-  if (!counted.length) return 0;
-  const ready = counted.filter(i => auditItemStatus(i, ctx) === "ready").length;
-  return Math.round((ready / counted.length) * 100);
-}
-
-// Readiness for a single scheme = ready % across only that scheme's items.
-function auditSchemeProgress(audit, schemeKey, ctx) {
-  const items = (audit.items || []).filter(i => (i.schemes || []).includes(schemeKey));
-  const counted = items.filter(i => auditItemStatus(i, ctx) !== "na");
-  if (!counted.length) return null;
-  const ready = counted.filter(i => auditItemStatus(i, ctx) === "ready").length;
-  return { pct: Math.round((ready / counted.length) * 100), ready, total: counted.length };
-}
-
-// Export an audit as a multi-sheet "audit pack" workbook for the auditor.
-// `scope` is "all" or a scheme key, in which case only that scheme's items export.
-function exportAuditPack(audit, ctx, emps, docs, scope = "all") {
+// Document progress export - shows what's done and outstanding
+function exportDocProgress(emps, docs) {
   const wb = XLSX.utils.book_new();
-  const scopeName = scope === "all" ? "All schemes" : (AUDIT_SCHEME_TAGS[scope]?.name || scope);
-  const items = (audit.items || []).filter(i => scope === "all" || (i.schemes || []).includes(scope));
-  const counts = AUDIT_STAT_ORDER.reduce((m, k) => { m[k] = 0; return m; }, {});
-  items.forEach(i => { counts[auditItemStatus(i, ctx)] = (counts[auditItemStatus(i, ctx)] || 0) + 1; });
-  const readyCount = items.filter(i => auditItemStatus(i, ctx) === "ready").length;
-  const countedCount = items.filter(i => auditItemStatus(i, ctx) !== "na").length;
-  const summary = [
-    { Field: "Audit Title", Value: audit.title },
-    { Field: "Scope", Value: scopeName },
-    { Field: "Audit Date", Value: audit.auditDate || "Not scheduled" },
-    { Field: "Readiness", Value: `${countedCount ? Math.round((readyCount / countedCount) * 100) : 0}%` },
-    { Field: "Items Ready", Value: counts.ready || 0 },
-    { Field: "Items In Progress", Value: counts.in_progress || 0 },
-    { Field: "Items Not Started", Value: counts.not_started || 0 },
-    { Field: "Items Needing Attention", Value: counts.attention || 0 },
-    { Field: "Items N/A", Value: counts.na || 0 },
-    { Field: "Pack Generated", Value: nowDateTime() },
-  ];
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summary), "Summary");
-
-  // Per-scheme coverage overview (only meaningful for a full export).
-  if (scope === "all") {
-    const cov = Object.entries(AUDIT_SCHEME_TAGS).map(([k, s]) => {
-      const p = auditSchemeProgress(audit, k, ctx);
-      return { Scheme: s.name, "Requirements": p ? p.total : 0, "Ready": p ? p.ready : 0, "Readiness": p ? `${p.pct}%` : "—" };
+  // Sheet 1: Full status matrix
+  const rows = emps.map(emp => {
+    const row = { Employee: emp.name, Role: emp.role };
+    docs.forEach(d => {
+      const assigned = d.assignedTo?.includes("all") || d.assignedTo?.includes(emp.id);
+      if (!assigned) { row[d.name] = "Not Assigned"; return; }
+      const chk = emp.docChecks[d.id];
+      if (!chk) { row[d.name] = "OUTSTANDING"; return; }
+      if (d.type === "contract") {
+        row[d.name] = chk.status === "signed" ? `SIGNED ${chk.signedConfirmedAt || chk.dateTime || chk.date}` : chk.status === "opened" ? `OPENED ${chk.dateTime || chk.date} - Awaiting signature` : `Completed ${chk.dateTime || chk.date}`;
+      } else {
+        const rs = getReviewStatus(chk, d.reviewMonths || 12);
+        row[d.name] = rs === "overdue" ? `OVERDUE - Last reviewed ${chk.dateTime || chk.date}` : rs === "due_soon" ? `DUE SOON - Last reviewed ${chk.dateTime || chk.date}` : `Reviewed ${chk.dateTime || chk.date}`;
+      }
     });
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(cov), "Scheme Coverage");
-  }
-
-  const checklist = items.map(i => {
-    const ev = i.auto ? autoEvaluateAudit(i.auto, ctx.emps, ctx.docs, ctx.obSubs) : null;
-    const evList = (i.evidence || []).map(e => e.type === "link" ? `${e.label || "Link"}: ${e.url}` : e.text).filter(Boolean);
-    if (ev) evList.unshift(`Auto-verified (${ev.metric}): ${ev.detail}`);
-    return {
-      Category: i.sectionName, Requirement: i.req,
-      "Applies To": (i.schemes || []).map(k => AUDIT_SCHEME_TAGS[k]?.name || k).join(", "),
-      Status: (AUDIT_STAT[auditItemStatus(i, ctx)] || {}).label || "",
-      "Auto-linked": i.auto ? "Yes" : "",
-      Evidence: evList.join("  |  ") || "—",
-      Notes: i.notes || "",
-    };
+    return row;
   });
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(checklist.length ? checklist : [{ Note: "No items" }]), "Checklist");
+  const ws1 = XLSX.utils.json_to_sheet(rows);
+  XLSX.utils.book_append_sheet(wb, ws1, "Document Status");
 
-  const active = emps.filter(e => !e.archived);
-  const workerRows = active.map(e => {
-    const contracts = docs.filter(d => (d.type === "contract") && (d.assignedTo?.includes("all") || d.assignedTo?.includes(e.id)));
-    const sops = docs.filter(d => (d.type === "sop") && (d.assignedTo?.includes("all") || d.assignedTo?.includes(e.id)));
-    const ob = (ctx.obSubs || []).some(s => s.employee_id === e.id);
-    return {
-      Worker: e.name, Role: e.role, Start: e.startDate || "",
-      "Contracts Signed": `${contracts.filter(c => e.docChecks[c.id]).length}/${contracts.length}`,
-      "SOPs / Training Reviewed": `${sops.filter(s => e.docChecks[s.id]).length}/${sops.length}`,
-      "Onboarding Record": ob ? "Yes" : "No",
-    };
+  // Sheet 2: Outstanding items only
+  const outstanding = [];
+  emps.forEach(emp => {
+    docs.forEach(d => {
+      const assigned = d.assignedTo?.includes("all") || d.assignedTo?.includes(emp.id);
+      if (!assigned) return;
+      const chk = emp.docChecks[d.id];
+      let issue = null;
+      if (!chk) { issue = "Not completed"; }
+      else if (d.type === "contract" && chk.status !== "signed") { issue = "Opened but not signed"; }
+      else if (d.type === "sop") {
+        const rs = getReviewStatus(chk, d.reviewMonths || 12);
+        if (rs === "overdue") issue = "Review overdue";
+        else if (rs === "due_soon") issue = "Review due soon";
+      }
+      if (issue) outstanding.push({ Employee: emp.name, Role: emp.role, Document: d.name, Type: d.type.toUpperCase(), Issue: issue, "Last Action": chk ? (chk.dateTime || chk.date) : "Never" });
+    });
   });
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(workerRows.length ? workerRows : [{ Note: "No active workers" }]), "Worker Evidence");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(outstanding.length ? outstanding : [{ Note: "All documents completed and up to date" }]), "Outstanding Items");
 
-  const safe = `${audit.title || "Audit"}_${scope === "all" ? "All" : (AUDIT_SCHEME_TAGS[scope]?.short || scope)}`.replace(/[^a-z0-9]+/gi, "_");
-  XLSX.writeFile(wb, `AuditPack_${safe}_${todayDate()}.xlsx`);
+  XLSX.writeFile(wb, `Document_Progress_${todayDate()}.xlsx`);
 }
 
 // ── Translations ──
 const T = {
-  en:{appName:"PeopleTrack",managerView:"Manager View",signIn:"Sign In",pinPlaceholder:"PIN",pinPrompt:"Enter your PIN to sign in",pinError:"PIN not recognised.",demoPins:"Demo PINs",manager:"Manager",employees:"Employees",employee:"Employee",dashboard:"Dashboard",documents:"Documents",signOut:"Sign Out",dashDesc:"Team performance and document compliance overview",avgPickRate:"Avg Pick Rate",avgDocCompliance:"Avg Doc Compliance",fullyCompliant:"Fully Compliant",needsAttention:"Needs Attention",teamOverview:"Team Overview",role:"Role",pickRate:"Pick Rate",trend:"Trend",docProgress:"Document Progress",status:"Status",excellent:"Excellent",attention:"Attention",inProgress:"In Progress",search:"Search...",add:"+ Add",addEmployee:"Add Employee",fullName:"Full Name",pinForSignIn:"PIN (for sign-in)",cancel:"Cancel",teamMembers:"team members",docManageDesc:"Manage SOPs and contracts",addDocument:"+ Add Document",docName:"Document Name",linkToDoc:"Link to Document (optional)",linkHint:"Google Drive, SharePoint, or Dropbox link",type:"Type",sop:"SOP",contract:"Contract",sops:"Standard Operating Procedures",contracts:"Contracts",remove:"Remove",removeEmployee:"Remove Employee",signed:"signed",backToEmployees:"← Back",pickRateHistory:"Pick Rate History",weeklyTracking:"Weekly tracking with targets",addWeek:"+ Add Week",week:"Week",rate:"Rate",target:"Target",addPickRate:"Add Pick Rate",weekStarting:"Week Starting",weekNumber:"Week Number (1–26+)",pickRate0100:"Pick Rate (kg/hr)",sopsDocs:"SOPs",contractsDocs:"Contracts",managerNotes:"Shared Notes",privateNotes:"Private Notes",notesPlaceholder:"Visible to employee...",privateNotesPlaceholder:"Only you can see...",welcome:"Welcome",latestPickRate:"Latest Pick Rate",pickRateTrend:"Pick Rate Trend",yourDocStatus:"Your document review status",reviewSign:"Sign Contract",viewDoc:"View Doc",viewSig:"View Sig",signBelow:"Draw your signature below",clear:"Clear",confirmSign:"Confirm & Sign",signHere:"Sign here",signature:"Signature",close:"Close",needData:"Need at least 2 weeks of data.",language:"Language",reviewed:"Reviewed",startDate:"Start Date",aboveTarget:"Above Target",belowTarget:"Below Target",targetLine:"Target",wk:"Wk",assignDocs:"Assign",assignedDocs:"Assigned Documents",allEmployees:"All Employees",noDocsAssigned:"No documents assigned",notesFromManager:"Notes from your manager",exportExcel:"Export Report",confirmReview:"I have reviewed and understood this document",markReviewed:"Mark as Reviewed",reviewedAt:"Reviewed",typeName:"Type your full name",downloadCert:"Download Certificate",contractText:"Contract Text",contractTextHint:"Employees must scroll through this before signing",scrollToBottom:"Please scroll to the bottom to continue",readConfirm:"I confirm that I have read, understood, and agree to the terms",declaration:"I confirm that I have read, understood, and agree to the terms of this document. I have scrolled through and reviewed the full contract text. I understand that by typing my name and providing my signature, I am acknowledging my agreement.",translationDisclaimer:"This is a translation for your understanding. The English version is the authoritative document.",translating:"Translating...",scrollReminder:"↓ Scroll down to read the full document",loading:"Loading..."},
-  bg:{appName:"PeopleTrack",managerView:"Мениджър",signIn:"Вход",pinPlaceholder:"ПИН",pinPrompt:"Въведете вашия ПИН",pinError:"ПИН не е разпознат.",demoPins:"Демо ПИН",manager:"Мениджър",employees:"Служители",employee:"Служител",dashboard:"Табло",documents:"Документи",signOut:"Изход",dashDesc:"Преглед на ефективност",avgPickRate:"Средна норма",avgDocCompliance:"Съответствие",fullyCompliant:"Напълно съответстващи",needsAttention:"Внимание",teamOverview:"Преглед",role:"Роля",pickRate:"Норма",trend:"Тенденция",docProgress:"Документи",status:"Статус",excellent:"Отличен",attention:"Внимание",inProgress:"В процес",search:"Търсене...",add:"+ Добави",addEmployee:"Добави служител",fullName:"Пълно име",pinForSignIn:"ПИН",cancel:"Отказ",teamMembers:"членове",docManageDesc:"Управление на документи",addDocument:"+ Добави",docName:"Име",linkToDoc:"Линк",linkHint:"Google Drive, SharePoint или Dropbox",type:"Тип",sop:"СОП",contract:"Договор",sops:"Стандартни процедури",contracts:"Договори",remove:"Премахни",removeEmployee:"Премахни",signed:"подписани",backToEmployees:"← Назад",pickRateHistory:"История",weeklyTracking:"Седмично проследяване",addWeek:"+ Седмица",week:"Седмица",rate:"Норма",target:"Цел",addPickRate:"Добави",weekStarting:"Начало",weekNumber:"Номер (1–26+)",pickRate0100:"Норма (кг/ч)",sopsDocs:"СОП",contractsDocs:"Договори",managerNotes:"Споделени бележки",privateNotes:"Лични бележки",notesPlaceholder:"За служителя...",privateNotesPlaceholder:"Само вие виждате...",welcome:"Добре дошли",latestPickRate:"Последна норма",pickRateTrend:"Тенденция",yourDocStatus:"Статус на документи",reviewSign:"Подпиши",viewDoc:"Виж",viewSig:"Подпис",signBelow:"Подпишете се",clear:"Изчисти",confirmSign:"Потвърди",signHere:"Подпис тук",signature:"Подпис",close:"Затвори",needData:"Необходими са 2 седмици.",language:"Език",reviewed:"Прегледан",startDate:"Начало",aboveTarget:"Над целта",belowTarget:"Под целта",targetLine:"Цел",wk:"Сд",assignDocs:"Задай",assignedDocs:"Зададени",allEmployees:"Всички",noDocsAssigned:"Няма документи",notesFromManager:"Бележки от мениджъра",exportExcel:"Експорт",confirmReview:"Прочетох и разбрах",markReviewed:"Маркирай",reviewedAt:"Прегледан",typeName:"Въведете името си",downloadCert:"Изтегли сертификат",contractText:"Текст на договора",contractTextHint:"Служителите трябва да превъртят до края",scrollToBottom:"Превъртете до края за да продължите",readConfirm:"Потвърждавам, че съм прочел, разбрал и съм съгласен",declaration:"Потвърждавам, че съм прочел, разбрал и съм съгласен с условията на този документ.",translationDisclaimer:"Това е превод за ваше разбиране. Английската версия е официалният документ.",translating:"Превеждане...",scrollReminder:"↓ Превъртете надолу",loading:"Зареждане..."},
-  kk:{appName:"PeopleTrack",managerView:"Менеджер",signIn:"Кіру",pinPlaceholder:"ПИН",pinPrompt:"ПИН енгізіңіз",pinError:"ПИН танылмады.",demoPins:"Демо ПИН",manager:"Менеджер",employees:"Қызметкерлер",employee:"Қызметкер",dashboard:"Тақта",documents:"Құжаттар",signOut:"Шығу",dashDesc:"Команда шолуы",avgPickRate:"Орт. жинау",avgDocCompliance:"Сәйкестік",fullyCompliant:"Толық сәйкес",needsAttention:"Назар",teamOverview:"Команда",role:"Рөлі",pickRate:"Жинау",trend:"Тенденция",docProgress:"Құжаттар",status:"Мәртебе",excellent:"Тамаша",attention:"Назар",inProgress:"Орындалуда",search:"Іздеу...",add:"+ Қосу",addEmployee:"Қызметкер қосу",fullName:"Толық аты",pinForSignIn:"ПИН",cancel:"Бас тарту",teamMembers:"мүшелер",docManageDesc:"Құжаттарды басқару",addDocument:"+ Қосу",docName:"Атауы",linkToDoc:"Сілтеме",linkHint:"Google Drive, SharePoint немесе Dropbox",type:"Түрі",sop:"СОП",contract:"Келісімшарт",sops:"Стандартты процедуралар",contracts:"Келісімшарттар",remove:"Жою",removeEmployee:"Жою",signed:"қол қойылды",backToEmployees:"← Артқа",pickRateHistory:"Тарих",weeklyTracking:"Апталық бақылау",addWeek:"+ Апта",week:"Апта",rate:"Көрсеткіш",target:"Мақсат",addPickRate:"Қосу",weekStarting:"Апта басы",weekNumber:"Нөмір (1–26+)",pickRate0100:"Жинау (кг/с)",sopsDocs:"СОП",contractsDocs:"Келісімшарттар",managerNotes:"Ортақ жазбалар",privateNotes:"Жеке жазбалар",notesPlaceholder:"Қызметкерге...",privateNotesPlaceholder:"Тек сіз...",welcome:"Қош келдіңіз",latestPickRate:"Соңғы жинау",pickRateTrend:"Тенденция",yourDocStatus:"Құжат мәртебесі",reviewSign:"Қол қою",viewDoc:"Көру",viewSig:"Қолтаңба",signBelow:"Қол қойыңыз",clear:"Тазалау",confirmSign:"Растау",signHere:"Мұнда",signature:"Қолтаңба",close:"Жабу",needData:"2 апта қажет.",language:"Тіл",reviewed:"Қаралды",startDate:"Бастау",aboveTarget:"Жоғары",belowTarget:"Төмен",targetLine:"Мақсат",wk:"Ап",assignDocs:"Тағайындау",assignedDocs:"Тағайындалған",allEmployees:"Барлығы",noDocsAssigned:"Құжат жоқ",notesFromManager:"Менеджер жазбалары",exportExcel:"Экспорт",confirmReview:"Мен оқып түсіндім",markReviewed:"Белгілеу",reviewedAt:"Қаралды",typeName:"Атыңызды жазыңыз",downloadCert:"Сертификат жүктеу",contractText:"Келісімшарт мәтіні",contractTextHint:"Соңына дейін оқуы керек",scrollToBottom:"Жалғастыру үшін соңына дейін жылжытыңыз",readConfirm:"Мен оқып, түсініп, шарттарына келісемін",declaration:"Мен осы құжатты оқып, түсініп, шарттарына келісемін.",translationDisclaimer:"Бұл аударма. Ағылшын нұсқасы ресми құжат.",translating:"Аударылуда...",scrollReminder:"↓ Төмен жылжытыңыз",loading:"Жүктелуде..."},
-  ky:{appName:"PeopleTrack",managerView:"Менеджер",signIn:"Кирүү",pinPlaceholder:"ПИН",pinPrompt:"ПИН киргизиңиз",pinError:"ПИН таанылган жок.",demoPins:"Демо ПИН",manager:"Менеджер",employees:"Кызматкерлер",employee:"Кызматкер",dashboard:"Панель",documents:"Документтер",signOut:"Чыгуу",dashDesc:"Команда сереби",avgPickRate:"Орт. чогултуу",avgDocCompliance:"Шайкештик",fullyCompliant:"Толук шайкеш",needsAttention:"Көңүл",teamOverview:"Команда",role:"Ролу",pickRate:"Чогултуу",trend:"Тенденция",docProgress:"Документтер",status:"Статус",excellent:"Мыкты",attention:"Көңүл",inProgress:"Жүрүүдө",search:"Издөө...",add:"+ Кошуу",addEmployee:"Кызматкер кошуу",fullName:"Толук аты",pinForSignIn:"ПИН",cancel:"Жокко чыгаруу",teamMembers:"мүчөлөр",docManageDesc:"Документтерди башкаруу",addDocument:"+ Кошуу",docName:"Аталышы",linkToDoc:"Шилтеме",linkHint:"Google Drive, SharePoint же Dropbox",type:"Түрү",sop:"СОП",contract:"Контракт",sops:"Стандарттуу процедуралар",contracts:"Контракттар",remove:"Жок кылуу",removeEmployee:"Жок кылуу",signed:"кол коюлду",backToEmployees:"← Артка",pickRateHistory:"Тарых",weeklyTracking:"Жумалык максаттар",addWeek:"+ Жума",week:"Жума",rate:"Көрсөткүч",target:"Максат",addPickRate:"Кошуу",weekStarting:"Жума башы",weekNumber:"Номер (1–26+)",pickRate0100:"Чогултуу (кг/с)",sopsDocs:"СОП",contractsDocs:"Контракттар",managerNotes:"Бөлүшүлгөн жазуулар",privateNotes:"Жеке жазуулар",notesPlaceholder:"Кызматкерге...",privateNotesPlaceholder:"Сиз гана...",welcome:"Кош келиңиз",latestPickRate:"Акыркы чогултуу",pickRateTrend:"Тенденция",yourDocStatus:"Документ статусу",reviewSign:"Кол коюу",viewDoc:"Көрүү",viewSig:"Кол тамга",signBelow:"Кол коюңуз",clear:"Тазалоо",confirmSign:"Ырастоо",signHere:"Кол коюңуз",signature:"Кол тамга",close:"Жабуу",needData:"2 жума керек.",language:"Тил",reviewed:"Каралды",startDate:"Башталган күн",aboveTarget:"Жогору",belowTarget:"Төмөн",targetLine:"Максат",wk:"Жм",assignDocs:"Дайындоо",assignedDocs:"Дайындалган",allEmployees:"Баары",noDocsAssigned:"Документ жок",notesFromManager:"Менеджер жазуулары",exportExcel:"Экспорт",confirmReview:"Мен окуп түшүндүм",markReviewed:"Белгилөө",reviewedAt:"Каралды",typeName:"Атыңызды жазыңыз",downloadCert:"Сертификат жүктөө",contractText:"Контракт тексти",contractTextHint:"Аягына чейин окушу керек",scrollToBottom:"Улантуу үчүн аягына чейин жылдырыңыз",readConfirm:"Мен окуп, түшүнүп, шарттарына макулмун",declaration:"Мен бул документти окуп, түшүнүп, шарттарына макулмун.",translationDisclaimer:"Бул котормо. Англис версиясы расмий документ.",translating:"Которулууда...",scrollReminder:"↓ Төмөн жылдырыңыз",loading:"Жүктөлүүдө..."},
-  mk:{appName:"PeopleTrack",managerView:"Менаџер",signIn:"Најава",pinPlaceholder:"ПИН",pinPrompt:"Внесете ПИН",pinError:"ПИН не е препознаен.",demoPins:"Демо ПИН",manager:"Менаџер",employees:"Вработени",employee:"Вработен",dashboard:"Табла",documents:"Документи",signOut:"Одјава",dashDesc:"Преглед на тим",avgPickRate:"Просек",avgDocCompliance:"Усогласеност",fullyCompliant:"Целосно",needsAttention:"Внимание",teamOverview:"Тим",role:"Улога",pickRate:"Норма",trend:"Тренд",docProgress:"Документи",status:"Статус",excellent:"Одличен",attention:"Внимание",inProgress:"Во тек",search:"Барај...",add:"+ Додади",addEmployee:"Додади вработен",fullName:"Целосно име",pinForSignIn:"ПИН",cancel:"Откажи",teamMembers:"членови",docManageDesc:"Управување со документи",addDocument:"+ Додади",docName:"Име",linkToDoc:"Линк",linkHint:"Google Drive, SharePoint или Dropbox",type:"Тип",sop:"СОП",contract:"Договор",sops:"Стандардни процедури",contracts:"Договори",remove:"Отстрани",removeEmployee:"Отстрани",signed:"потпишани",backToEmployees:"← Назад",pickRateHistory:"Историја",weeklyTracking:"Неделно следење",addWeek:"+ Недела",week:"Недела",rate:"Норма",target:"Цел",addPickRate:"Додади",weekStarting:"Почеток",weekNumber:"Број (1–26+)",pickRate0100:"Норма (кг/ч)",sopsDocs:"СОП",contractsDocs:"Договори",managerNotes:"Споделени белешки",privateNotes:"Приватни белешки",notesPlaceholder:"За вработениот...",privateNotesPlaceholder:"Само вие...",welcome:"Добредојдовте",latestPickRate:"Последна норма",pickRateTrend:"Тренд",yourDocStatus:"Статус на документи",reviewSign:"Потпиши",viewDoc:"Погледни",viewSig:"Потпис",signBelow:"Потпишете се",clear:"Исчисти",confirmSign:"Потврди",signHere:"Потпис тука",signature:"Потпис",close:"Затвори",needData:"2 недели.",language:"Јазик",reviewed:"Прегледан",startDate:"Датум",aboveTarget:"Над целта",belowTarget:"Под целта",targetLine:"Цел",wk:"Нд",assignDocs:"Додели",assignedDocs:"Доделени",allEmployees:"Сите",noDocsAssigned:"Нема",notesFromManager:"Белешки",exportExcel:"Извоз",confirmReview:"Го прочитав и разбрав",markReviewed:"Означи",reviewedAt:"Прегледан",typeName:"Внесете име",downloadCert:"Преземи сертификат",contractText:"Текст на договор",contractTextHint:"Мора да скролираат до крај",scrollToBottom:"Скролирајте до крај за да продолжите",readConfirm:"Потврдувам дека прочитав, разбрав и се согласувам",declaration:"Потврдувам дека прочитав, разбрав и се согласувам со условите.",translationDisclaimer:"Ова е превод. Англиската верзија е официјална.",translating:"Се преведува...",scrollReminder:"↓ Скролирајте надолу",loading:"Се вчитува..."},
-  ru:{appName:"PeopleTrack",managerView:"Менеджер",signIn:"Войти",pinPlaceholder:"ПИН",pinPrompt:"Введите ПИН",pinError:"ПИН не распознан.",demoPins:"Демо ПИН",manager:"Менеджер",employees:"Сотрудники",employee:"Сотрудник",dashboard:"Панель",documents:"Документы",signOut:"Выход",dashDesc:"Обзор команды",avgPickRate:"Ср. норма",avgDocCompliance:"Соответствие",fullyCompliant:"Полное",needsAttention:"Внимание",teamOverview:"Команда",role:"Роль",pickRate:"Норма",trend:"Тенденция",docProgress:"Документы",status:"Статус",excellent:"Отлично",attention:"Внимание",inProgress:"В процессе",search:"Поиск...",add:"+ Добавить",addEmployee:"Добавить",fullName:"Полное имя",pinForSignIn:"ПИН",cancel:"Отмена",teamMembers:"членов",docManageDesc:"Управление документами",addDocument:"+ Добавить",docName:"Название",linkToDoc:"Ссылка",linkHint:"Google Drive, SharePoint или Dropbox",type:"Тип",sop:"СОП",contract:"Договор",sops:"Стандартные процедуры",contracts:"Договоры",remove:"Удалить",removeEmployee:"Удалить",signed:"подписано",backToEmployees:"← Назад",pickRateHistory:"История",weeklyTracking:"Еженедельный учёт",addWeek:"+ Неделю",week:"Неделя",rate:"Норма",target:"Цель",addPickRate:"Добавить",weekStarting:"Начало",weekNumber:"Номер (1–26+)",pickRate0100:"Норма (кг/ч)",sopsDocs:"СОП",contractsDocs:"Договоры",managerNotes:"Общие заметки",privateNotes:"Приватные",notesPlaceholder:"Для сотрудника...",privateNotesPlaceholder:"Только вы...",welcome:"Добро пожаловать",latestPickRate:"Последняя норма",pickRateTrend:"Тенденция",yourDocStatus:"Статус документов",reviewSign:"Подписать",viewDoc:"Открыть",viewSig:"Подпись",signBelow:"Распишитесь",clear:"Очистить",confirmSign:"Подтвердить",signHere:"Подпись",signature:"Подпись",close:"Закрыть",needData:"Минимум 2 недели.",language:"Язык",reviewed:"Просмотрен",startDate:"Дата начала",aboveTarget:"Выше цели",belowTarget:"Ниже цели",targetLine:"Цель",wk:"Нд",assignDocs:"Назначить",assignedDocs:"Назначенные",allEmployees:"Все",noDocsAssigned:"Нет",notesFromManager:"Заметки менеджера",exportExcel:"Экспорт",confirmReview:"Я прочитал и понял",markReviewed:"Отметить",reviewedAt:"Просмотрен",typeName:"Введите имя",downloadCert:"Скачать сертификат",contractText:"Текст договора",contractTextHint:"Должны прокрутить до конца",scrollToBottom:"Прокрутите до конца чтобы продолжить",readConfirm:"Я подтверждаю, что прочитал, понял и согласен",declaration:"Я подтверждаю, что прочитал, понял и согласен с условиями этого документа.",translationDisclaimer:"Это перевод. Английская версия является официальной.",translating:"Перевод...",scrollReminder:"↓ Прокрутите вниз",loading:"Загрузка..."},
-  uk:{appName:"PeopleTrack",managerView:"Менеджер",signIn:"Увійти",pinPlaceholder:"ПІН",pinPrompt:"Введіть ПІН",pinError:"ПІН не розпізнано.",demoPins:"Демо ПІН",manager:"Менеджер",employees:"Співробітники",employee:"Співробітник",dashboard:"Панель",documents:"Документи",signOut:"Вихід",dashDesc:"Огляд команди",avgPickRate:"Сер. норма",avgDocCompliance:"Відповідність",fullyCompliant:"Повна",needsAttention:"Увага",teamOverview:"Команда",role:"Роль",pickRate:"Норма",trend:"Тенденція",docProgress:"Документи",status:"Статус",excellent:"Відмінно",attention:"Увага",inProgress:"В процесі",search:"Пошук...",add:"+ Додати",addEmployee:"Додати",fullName:"Повне ім'я",pinForSignIn:"ПІН",cancel:"Скасувати",teamMembers:"членів",docManageDesc:"Керування документами",addDocument:"+ Додати",docName:"Назва",linkToDoc:"Посилання",linkHint:"Google Drive, SharePoint або Dropbox",type:"Тип",sop:"СОП",contract:"Договір",sops:"Стандартні процедури",contracts:"Договори",remove:"Видалити",removeEmployee:"Видалити",signed:"підписано",backToEmployees:"← Назад",pickRateHistory:"Історія",weeklyTracking:"Щотижневий облік",addWeek:"+ Тиждень",week:"Тиждень",rate:"Норма",target:"Ціль",addPickRate:"Додати",weekStarting:"Початок",weekNumber:"Номер (1–26+)",pickRate0100:"Норма (кг/ч)",sopsDocs:"СОП",contractsDocs:"Договори",managerNotes:"Спільні нотатки",privateNotes:"Приватні",notesPlaceholder:"Для співробітника...",privateNotesPlaceholder:"Тільки ви...",welcome:"Ласкаво просимо",latestPickRate:"Остання норма",pickRateTrend:"Тенденція",yourDocStatus:"Статус документів",reviewSign:"Підписати",viewDoc:"Відкрити",viewSig:"Підпис",signBelow:"Підпишіться",clear:"Очистити",confirmSign:"Підтвердити",signHere:"Підпис",signature:"Підпис",close:"Закрити",needData:"2 тижні.",language:"Мова",reviewed:"Переглянуто",startDate:"Дата",aboveTarget:"Вище цілі",belowTarget:"Нижче цілі",targetLine:"Ціль",wk:"Тж",assignDocs:"Призначити",assignedDocs:"Призначені",allEmployees:"Всі",noDocsAssigned:"Немає",notesFromManager:"Нотатки менеджера",exportExcel:"Експорт",confirmReview:"Я прочитав і зрозумів",markReviewed:"Позначити",reviewedAt:"Переглянуто",typeName:"Введіть ім'я",downloadCert:"Завантажити сертифікат",contractText:"Текст договору",contractTextHint:"Повинні прокрутити до кінця",scrollToBottom:"Прокрутіть до кінця щоб продовжити",readConfirm:"Я підтверджую, що прочитав, зрозумів і погоджуюсь",declaration:"Я підтверджую, що прочитав, зрозумів і погоджуюсь з умовами цього документа.",translationDisclaimer:"Це переклад. Англійська версія є офіційною.",translating:"Перекладається...",scrollReminder:"↓ Прокрутіть вниз",loading:"Завантаження..."},
+  en:{appName:"PeopleTrack",managerView:"Manager View",signIn:"Sign In",pinPlaceholder:"PIN",pinPrompt:"Enter your PIN to sign in",pinError:"PIN not recognised.",demoPins:"Demo PINs",manager:"Manager",employees:"Employees",employee:"Employee",dashboard:"Dashboard",documents:"Documents",signOut:"Sign Out",dashDesc:"Team performance and document compliance overview",avgPickRate:"Avg Pick Rate",avgDocCompliance:"Avg Doc Compliance",fullyCompliant:"Fully Compliant",needsAttention:"Needs Attention",teamOverview:"Team Overview",role:"Role",pickRate:"Pick Rate",trend:"Trend",docProgress:"Document Progress",status:"Status",excellent:"Excellent",attention:"Attention",inProgress:"In Progress",search:"Search...",add:"+ Add",addEmployee:"Add Employee",fullName:"Full Name",pinForSignIn:"PIN (for sign-in)",cancel:"Cancel",teamMembers:"team members",docManageDesc:"Manage SOPs and contracts",addDocument:"+ Add Document",docName:"Document Name",linkToDoc:"Link to Document (optional)",linkHint:"Google Drive, SharePoint, or Dropbox link",type:"Type",sop:"SOP",contract:"Contract",sops:"Standard Operating Procedures",contracts:"Contracts",remove:"Remove",removeEmployee:"Remove Employee",signed:"signed",backToEmployees:"← Back",pickRateHistory:"Pick Rate History",weeklyTracking:"Weekly tracking with targets",addWeek:"+ Add Week",week:"Week",rate:"Rate",target:"Target",addPickRate:"Add Pick Rate",weekEnding:"Week Ending",weekNumber:"Week Number (1–26+)",pickRate0100:"Pick Rate (kg/hr)",sopsDocs:"SOPs",contractsDocs:"Contracts",managerNotes:"Shared Notes",privateNotes:"Private Notes",notesPlaceholder:"Visible to employee...",privateNotesPlaceholder:"Only you can see...",welcome:"Welcome",latestPickRate:"Latest Pick Rate",pickRateTrend:"Pick Rate Trend",yourDocStatus:"Your document review status",reviewSign:"Sign Contract",viewDoc:"View Doc",viewSig:"View Sig",signBelow:"Draw your signature below",clear:"Clear",confirmSign:"Confirm & Sign",signHere:"Sign here",signature:"Signature",close:"Close",needData:"Need at least 2 weeks of data.",language:"Language",reviewed:"Reviewed",startDate:"Start Date",aboveTarget:"Above Target",belowTarget:"Below Target",targetLine:"Target",wk:"Wk",assignDocs:"Assign",assignedDocs:"Assigned Documents",allEmployees:"All Employees",noDocsAssigned:"No documents assigned",notesFromManager:"Notes from your manager",exportExcel:"Export Report",confirmReview:"I have reviewed and understood this document",markReviewed:"Mark as Reviewed",reviewedAt:"Reviewed",typeName:"Type your full name",downloadCert:"Download Certificate",contractText:"Contract Text",contractTextHint:"Employees must scroll through this before signing",scrollToBottom:"Please scroll to the bottom to continue",readConfirm:"I confirm that I have read, understood, and agree to the terms",declaration:"I confirm that I have read, understood, and agree to the terms of this document. I have scrolled through and reviewed the full contract text. I understand that by typing my name and providing my signature, I am acknowledging my agreement.",translationDisclaimer:"This is a translation for your understanding. The English version is the authoritative document.",translating:"Translating...",scrollReminder:"↓ Scroll down to read the full document",loading:"Loading..."},
+  bg:{appName:"PeopleTrack",managerView:"Мениджър",signIn:"Вход",pinPlaceholder:"ПИН",pinPrompt:"Въведете вашия ПИН",pinError:"ПИН не е разпознат.",demoPins:"Демо ПИН",manager:"Мениджър",employees:"Служители",employee:"Служител",dashboard:"Табло",documents:"Документи",signOut:"Изход",dashDesc:"Преглед на ефективност",avgPickRate:"Средна норма",avgDocCompliance:"Съответствие",fullyCompliant:"Напълно съответстващи",needsAttention:"Внимание",teamOverview:"Преглед",role:"Роля",pickRate:"Норма",trend:"Тенденция",docProgress:"Документи",status:"Статус",excellent:"Отличен",attention:"Внимание",inProgress:"В процес",search:"Търсене...",add:"+ Добави",addEmployee:"Добави служител",fullName:"Пълно име",pinForSignIn:"ПИН",cancel:"Отказ",teamMembers:"членове",docManageDesc:"Управление на документи",addDocument:"+ Добави",docName:"Име",linkToDoc:"Линк",linkHint:"Google Drive, SharePoint или Dropbox",type:"Тип",sop:"СОП",contract:"Договор",sops:"Стандартни процедури",contracts:"Договори",remove:"Премахни",removeEmployee:"Премахни",signed:"подписани",backToEmployees:"← Назад",pickRateHistory:"История",weeklyTracking:"Седмично проследяване",addWeek:"+ Седмица",week:"Седмица",rate:"Норма",target:"Цел",addPickRate:"Добави",weekEnding:"Край на седмицата",weekNumber:"Номер (1–26+)",pickRate0100:"Норма (кг/ч)",sopsDocs:"СОП",contractsDocs:"Договори",managerNotes:"Споделени бележки",privateNotes:"Лични бележки",notesPlaceholder:"За служителя...",privateNotesPlaceholder:"Само вие виждате...",welcome:"Добре дошли",latestPickRate:"Последна норма",pickRateTrend:"Тенденция",yourDocStatus:"Статус на документи",reviewSign:"Подпиши",viewDoc:"Виж",viewSig:"Подпис",signBelow:"Подпишете се",clear:"Изчисти",confirmSign:"Потвърди",signHere:"Подпис тук",signature:"Подпис",close:"Затвори",needData:"Необходими са 2 седмици.",language:"Език",reviewed:"Прегледан",startDate:"Начало",aboveTarget:"Над целта",belowTarget:"Под целта",targetLine:"Цел",wk:"Сд",assignDocs:"Задай",assignedDocs:"Зададени",allEmployees:"Всички",noDocsAssigned:"Няма документи",notesFromManager:"Бележки от мениджъра",exportExcel:"Експорт",confirmReview:"Прочетох и разбрах",markReviewed:"Маркирай",reviewedAt:"Прегледан",typeName:"Въведете името си",downloadCert:"Изтегли сертификат",contractText:"Текст на договора",contractTextHint:"Служителите трябва да превъртят до края",scrollToBottom:"Превъртете до края за да продължите",readConfirm:"Потвърждавам, че съм прочел, разбрал и съм съгласен",declaration:"Потвърждавам, че съм прочел, разбрал и съм съгласен с условията на този документ.",translationDisclaimer:"Това е превод за ваше разбиране. Английската версия е официалният документ.",translating:"Превеждане...",scrollReminder:"↓ Превъртете надолу",loading:"Зареждане..."},
+  kk:{appName:"PeopleTrack",managerView:"Менеджер",signIn:"Кіру",pinPlaceholder:"ПИН",pinPrompt:"ПИН енгізіңіз",pinError:"ПИН танылмады.",demoPins:"Демо ПИН",manager:"Менеджер",employees:"Қызметкерлер",employee:"Қызметкер",dashboard:"Тақта",documents:"Құжаттар",signOut:"Шығу",dashDesc:"Команда шолуы",avgPickRate:"Орт. жинау",avgDocCompliance:"Сәйкестік",fullyCompliant:"Толық сәйкес",needsAttention:"Назар",teamOverview:"Команда",role:"Рөлі",pickRate:"Жинау",trend:"Тенденция",docProgress:"Құжаттар",status:"Мәртебе",excellent:"Тамаша",attention:"Назар",inProgress:"Орындалуда",search:"Іздеу...",add:"+ Қосу",addEmployee:"Қызметкер қосу",fullName:"Толық аты",pinForSignIn:"ПИН",cancel:"Бас тарту",teamMembers:"мүшелер",docManageDesc:"Құжаттарды басқару",addDocument:"+ Қосу",docName:"Атауы",linkToDoc:"Сілтеме",linkHint:"Google Drive, SharePoint немесе Dropbox",type:"Түрі",sop:"СОП",contract:"Келісімшарт",sops:"Стандартты процедуралар",contracts:"Келісімшарттар",remove:"Жою",removeEmployee:"Жою",signed:"қол қойылды",backToEmployees:"← Артқа",pickRateHistory:"Тарих",weeklyTracking:"Апталық бақылау",addWeek:"+ Апта",week:"Апта",rate:"Көрсеткіш",target:"Мақсат",addPickRate:"Қосу",weekEnding:"Апта соңы",weekNumber:"Нөмір (1–26+)",pickRate0100:"Жинау (кг/с)",sopsDocs:"СОП",contractsDocs:"Келісімшарттар",managerNotes:"Ортақ жазбалар",privateNotes:"Жеке жазбалар",notesPlaceholder:"Қызметкерге...",privateNotesPlaceholder:"Тек сіз...",welcome:"Қош келдіңіз",latestPickRate:"Соңғы жинау",pickRateTrend:"Тенденция",yourDocStatus:"Құжат мәртебесі",reviewSign:"Қол қою",viewDoc:"Көру",viewSig:"Қолтаңба",signBelow:"Қол қойыңыз",clear:"Тазалау",confirmSign:"Растау",signHere:"Мұнда",signature:"Қолтаңба",close:"Жабу",needData:"2 апта қажет.",language:"Тіл",reviewed:"Қаралды",startDate:"Бастау",aboveTarget:"Жоғары",belowTarget:"Төмен",targetLine:"Мақсат",wk:"Ап",assignDocs:"Тағайындау",assignedDocs:"Тағайындалған",allEmployees:"Барлығы",noDocsAssigned:"Құжат жоқ",notesFromManager:"Менеджер жазбалары",exportExcel:"Экспорт",confirmReview:"Мен оқып түсіндім",markReviewed:"Белгілеу",reviewedAt:"Қаралды",typeName:"Атыңызды жазыңыз",downloadCert:"Сертификат жүктеу",contractText:"Келісімшарт мәтіні",contractTextHint:"Соңына дейін оқуы керек",scrollToBottom:"Жалғастыру үшін соңына дейін жылжытыңыз",readConfirm:"Мен оқып, түсініп, шарттарына келісемін",declaration:"Мен осы құжатты оқып, түсініп, шарттарына келісемін.",translationDisclaimer:"Бұл аударма. Ағылшын нұсқасы ресми құжат.",translating:"Аударылуда...",scrollReminder:"↓ Төмен жылжытыңыз",loading:"Жүктелуде..."},
+  ky:{appName:"PeopleTrack",managerView:"Менеджер",signIn:"Кирүү",pinPlaceholder:"ПИН",pinPrompt:"ПИН киргизиңиз",pinError:"ПИН таанылган жок.",demoPins:"Демо ПИН",manager:"Менеджер",employees:"Кызматкерлер",employee:"Кызматкер",dashboard:"Панель",documents:"Документтер",signOut:"Чыгуу",dashDesc:"Команда сереби",avgPickRate:"Орт. чогултуу",avgDocCompliance:"Шайкештик",fullyCompliant:"Толук шайкеш",needsAttention:"Көңүл",teamOverview:"Команда",role:"Ролу",pickRate:"Чогултуу",trend:"Тенденция",docProgress:"Документтер",status:"Статус",excellent:"Мыкты",attention:"Көңүл",inProgress:"Жүрүүдө",search:"Издөө...",add:"+ Кошуу",addEmployee:"Кызматкер кошуу",fullName:"Толук аты",pinForSignIn:"ПИН",cancel:"Жокко чыгаруу",teamMembers:"мүчөлөр",docManageDesc:"Документтерди башкаруу",addDocument:"+ Кошуу",docName:"Аталышы",linkToDoc:"Шилтеме",linkHint:"Google Drive, SharePoint же Dropbox",type:"Түрү",sop:"СОП",contract:"Контракт",sops:"Стандарттуу процедуралар",contracts:"Контракттар",remove:"Жок кылуу",removeEmployee:"Жок кылуу",signed:"кол коюлду",backToEmployees:"← Артка",pickRateHistory:"Тарых",weeklyTracking:"Жумалык максаттар",addWeek:"+ Жума",week:"Жума",rate:"Көрсөткүч",target:"Максат",addPickRate:"Кошуу",weekEnding:"Жума аягы",weekNumber:"Номер (1–26+)",pickRate0100:"Чогултуу (кг/с)",sopsDocs:"СОП",contractsDocs:"Контракттар",managerNotes:"Бөлүшүлгөн жазуулар",privateNotes:"Жеке жазуулар",notesPlaceholder:"Кызматкерге...",privateNotesPlaceholder:"Сиз гана...",welcome:"Кош келиңиз",latestPickRate:"Акыркы чогултуу",pickRateTrend:"Тенденция",yourDocStatus:"Документ статусу",reviewSign:"Кол коюу",viewDoc:"Көрүү",viewSig:"Кол тамга",signBelow:"Кол коюңуз",clear:"Тазалоо",confirmSign:"Ырастоо",signHere:"Кол коюңуз",signature:"Кол тамга",close:"Жабуу",needData:"2 жума керек.",language:"Тил",reviewed:"Каралды",startDate:"Башталган күн",aboveTarget:"Жогору",belowTarget:"Төмөн",targetLine:"Максат",wk:"Жм",assignDocs:"Дайындоо",assignedDocs:"Дайындалган",allEmployees:"Баары",noDocsAssigned:"Документ жок",notesFromManager:"Менеджер жазуулары",exportExcel:"Экспорт",confirmReview:"Мен окуп түшүндүм",markReviewed:"Белгилөө",reviewedAt:"Каралды",typeName:"Атыңызды жазыңыз",downloadCert:"Сертификат жүктөө",contractText:"Контракт тексти",contractTextHint:"Аягына чейин окушу керек",scrollToBottom:"Улантуу үчүн аягына чейин жылдырыңыз",readConfirm:"Мен окуп, түшүнүп, шарттарына макулмун",declaration:"Мен бул документти окуп, түшүнүп, шарттарына макулмун.",translationDisclaimer:"Бул котормо. Англис версиясы расмий документ.",translating:"Которулууда...",scrollReminder:"↓ Төмөн жылдырыңыз",loading:"Жүктөлүүдө..."},
+  mk:{appName:"PeopleTrack",managerView:"Менаџер",signIn:"Најава",pinPlaceholder:"ПИН",pinPrompt:"Внесете ПИН",pinError:"ПИН не е препознаен.",demoPins:"Демо ПИН",manager:"Менаџер",employees:"Вработени",employee:"Вработен",dashboard:"Табла",documents:"Документи",signOut:"Одјава",dashDesc:"Преглед на тим",avgPickRate:"Просек",avgDocCompliance:"Усогласеност",fullyCompliant:"Целосно",needsAttention:"Внимание",teamOverview:"Тим",role:"Улога",pickRate:"Норма",trend:"Тренд",docProgress:"Документи",status:"Статус",excellent:"Одличен",attention:"Внимание",inProgress:"Во тек",search:"Барај...",add:"+ Додади",addEmployee:"Додади вработен",fullName:"Целосно име",pinForSignIn:"ПИН",cancel:"Откажи",teamMembers:"членови",docManageDesc:"Управување со документи",addDocument:"+ Додади",docName:"Име",linkToDoc:"Линк",linkHint:"Google Drive, SharePoint или Dropbox",type:"Тип",sop:"СОП",contract:"Договор",sops:"Стандардни процедури",contracts:"Договори",remove:"Отстрани",removeEmployee:"Отстрани",signed:"потпишани",backToEmployees:"← Назад",pickRateHistory:"Историја",weeklyTracking:"Неделно следење",addWeek:"+ Недела",week:"Недела",rate:"Норма",target:"Цел",addPickRate:"Додади",weekEnding:"Крај на неделата",weekNumber:"Број (1–26+)",pickRate0100:"Норма (кг/ч)",sopsDocs:"СОП",contractsDocs:"Договори",managerNotes:"Споделени белешки",privateNotes:"Приватни белешки",notesPlaceholder:"За вработениот...",privateNotesPlaceholder:"Само вие...",welcome:"Добредојдовте",latestPickRate:"Последна норма",pickRateTrend:"Тренд",yourDocStatus:"Статус на документи",reviewSign:"Потпиши",viewDoc:"Погледни",viewSig:"Потпис",signBelow:"Потпишете се",clear:"Исчисти",confirmSign:"Потврди",signHere:"Потпис тука",signature:"Потпис",close:"Затвори",needData:"2 недели.",language:"Јазик",reviewed:"Прегледан",startDate:"Датум",aboveTarget:"Над целта",belowTarget:"Под целта",targetLine:"Цел",wk:"Нд",assignDocs:"Додели",assignedDocs:"Доделени",allEmployees:"Сите",noDocsAssigned:"Нема",notesFromManager:"Белешки",exportExcel:"Извоз",confirmReview:"Го прочитав и разбрав",markReviewed:"Означи",reviewedAt:"Прегледан",typeName:"Внесете име",downloadCert:"Преземи сертификат",contractText:"Текст на договор",contractTextHint:"Мора да скролираат до крај",scrollToBottom:"Скролирајте до крај за да продолжите",readConfirm:"Потврдувам дека прочитав, разбрав и се согласувам",declaration:"Потврдувам дека прочитав, разбрав и се согласувам со условите.",translationDisclaimer:"Ова е превод. Англиската верзија е официјална.",translating:"Се преведува...",scrollReminder:"↓ Скролирајте надолу",loading:"Се вчитува..."},
+  ru:{appName:"PeopleTrack",managerView:"Менеджер",signIn:"Войти",pinPlaceholder:"ПИН",pinPrompt:"Введите ПИН",pinError:"ПИН не распознан.",demoPins:"Демо ПИН",manager:"Менеджер",employees:"Сотрудники",employee:"Сотрудник",dashboard:"Панель",documents:"Документы",signOut:"Выход",dashDesc:"Обзор команды",avgPickRate:"Ср. норма",avgDocCompliance:"Соответствие",fullyCompliant:"Полное",needsAttention:"Внимание",teamOverview:"Команда",role:"Роль",pickRate:"Норма",trend:"Тенденция",docProgress:"Документы",status:"Статус",excellent:"Отлично",attention:"Внимание",inProgress:"В процессе",search:"Поиск...",add:"+ Добавить",addEmployee:"Добавить",fullName:"Полное имя",pinForSignIn:"ПИН",cancel:"Отмена",teamMembers:"членов",docManageDesc:"Управление документами",addDocument:"+ Добавить",docName:"Название",linkToDoc:"Ссылка",linkHint:"Google Drive, SharePoint или Dropbox",type:"Тип",sop:"СОП",contract:"Договор",sops:"Стандартные процедуры",contracts:"Договоры",remove:"Удалить",removeEmployee:"Удалить",signed:"подписано",backToEmployees:"← Назад",pickRateHistory:"История",weeklyTracking:"Еженедельный учёт",addWeek:"+ Неделю",week:"Неделя",rate:"Норма",target:"Цель",addPickRate:"Добавить",weekEnding:"Край на седмицата",weekNumber:"Номер (1–26+)",pickRate0100:"Норма (кг/ч)",sopsDocs:"СОП",contractsDocs:"Договоры",managerNotes:"Общие заметки",privateNotes:"Приватные",notesPlaceholder:"Для сотрудника...",privateNotesPlaceholder:"Только вы...",welcome:"Добро пожаловать",latestPickRate:"Последняя норма",pickRateTrend:"Тенденция",yourDocStatus:"Статус документов",reviewSign:"Подписать",viewDoc:"Открыть",viewSig:"Подпись",signBelow:"Распишитесь",clear:"Очистить",confirmSign:"Подтвердить",signHere:"Подпись",signature:"Подпись",close:"Закрыть",needData:"Минимум 2 недели.",language:"Язык",reviewed:"Просмотрен",startDate:"Дата начала",aboveTarget:"Выше цели",belowTarget:"Ниже цели",targetLine:"Цель",wk:"Нд",assignDocs:"Назначить",assignedDocs:"Назначенные",allEmployees:"Все",noDocsAssigned:"Нет",notesFromManager:"Заметки менеджера",exportExcel:"Экспорт",confirmReview:"Я прочитал и понял",markReviewed:"Отметить",reviewedAt:"Просмотрен",typeName:"Введите имя",downloadCert:"Скачать сертификат",contractText:"Текст договора",contractTextHint:"Должны прокрутить до конца",scrollToBottom:"Прокрутите до конца чтобы продолжить",readConfirm:"Я подтверждаю, что прочитал, понял и согласен",declaration:"Я подтверждаю, что прочитал, понял и согласен с условиями этого документа.",translationDisclaimer:"Это перевод. Английская версия является официальной.",translating:"Перевод...",scrollReminder:"↓ Прокрутите вниз",loading:"Загрузка..."},
+  uk:{appName:"PeopleTrack",managerView:"Менеджер",signIn:"Увійти",pinPlaceholder:"ПІН",pinPrompt:"Введіть ПІН",pinError:"ПІН не розпізнано.",demoPins:"Демо ПІН",manager:"Менеджер",employees:"Співробітники",employee:"Співробітник",dashboard:"Панель",documents:"Документи",signOut:"Вихід",dashDesc:"Огляд команди",avgPickRate:"Сер. норма",avgDocCompliance:"Відповідність",fullyCompliant:"Повна",needsAttention:"Увага",teamOverview:"Команда",role:"Роль",pickRate:"Норма",trend:"Тенденція",docProgress:"Документи",status:"Статус",excellent:"Відмінно",attention:"Увага",inProgress:"В процесі",search:"Пошук...",add:"+ Додати",addEmployee:"Додати",fullName:"Повне ім'я",pinForSignIn:"ПІН",cancel:"Скасувати",teamMembers:"членів",docManageDesc:"Керування документами",addDocument:"+ Додати",docName:"Назва",linkToDoc:"Посилання",linkHint:"Google Drive, SharePoint або Dropbox",type:"Тип",sop:"СОП",contract:"Договір",sops:"Стандартні процедури",contracts:"Договори",remove:"Видалити",removeEmployee:"Видалити",signed:"підписано",backToEmployees:"← Назад",pickRateHistory:"Історія",weeklyTracking:"Щотижневий облік",addWeek:"+ Тиждень",week:"Тиждень",rate:"Норма",target:"Ціль",addPickRate:"Додати",weekEnding:"Кінець тижня",weekNumber:"Номер (1–26+)",pickRate0100:"Норма (кг/ч)",sopsDocs:"СОП",contractsDocs:"Договори",managerNotes:"Спільні нотатки",privateNotes:"Приватні",notesPlaceholder:"Для співробітника...",privateNotesPlaceholder:"Тільки ви...",welcome:"Ласкаво просимо",latestPickRate:"Остання норма",pickRateTrend:"Тенденція",yourDocStatus:"Статус документів",reviewSign:"Підписати",viewDoc:"Відкрити",viewSig:"Підпис",signBelow:"Підпишіться",clear:"Очистити",confirmSign:"Підтвердити",signHere:"Підпис",signature:"Підпис",close:"Закрити",needData:"2 тижні.",language:"Мова",reviewed:"Переглянуто",startDate:"Дата",aboveTarget:"Вище цілі",belowTarget:"Нижче цілі",targetLine:"Ціль",wk:"Тж",assignDocs:"Призначити",assignedDocs:"Призначені",allEmployees:"Всі",noDocsAssigned:"Немає",notesFromManager:"Нотатки менеджера",exportExcel:"Експорт",confirmReview:"Я прочитав і зрозумів",markReviewed:"Позначити",reviewedAt:"Переглянуто",typeName:"Введіть ім'я",downloadCert:"Завантажити сертифікат",contractText:"Текст договору",contractTextHint:"Повинні прокрутити до кінця",scrollToBottom:"Прокрутіть до кінця щоб продовжити",readConfirm:"Я підтверджую, що прочитав, зрозумів і погоджуюсь",declaration:"Я підтверджую, що прочитав, зрозумів і погоджуюсь з умовами цього документа.",translationDisclaimer:"Це переклад. Англійська версія є офіційною.",translating:"Перекладається...",scrollReminder:"↓ Прокрутіть вниз",loading:"Завантаження..."},
 };
 const LL = { en:"English",bg:"Български",kk:"Қазақша",ky:"Кыргызча",mk:"Македонски",ru:"Русский",uk:"Українська" };
 
@@ -960,7 +683,6 @@ export default function App() {
   const { managerPin, loaded: sL } = useSettings();
   const { obDocs, loaded: obDL, refresh: refreshObDocs } = useOnboardingDocs();
   const { subs: obSubs, loaded: obSL, saveSub: saveObSub, refresh: refreshObSubs } = useOnboardingSubs();
-  const { audits, loaded: auL, saveAudit, deleteAudit, refresh: refreshAudits } = useAudits();
   const [lang, setLang] = useLang();
 
   const [auth, setAuth] = useState(null);
@@ -973,20 +695,16 @@ export default function App() {
   const [nPR, sNPR] = useState(""); const [nPD, sNPD] = useState(todayDate()); const [nPW, sNPW] = useState("");
   const [obOpenDocId, setObOpenDocId] = useState(null); const [obReviewId, setObReviewId] = useState(null);
   const [showArchived, setShowArchived] = useState(false);
-  const [selAuditId, setSelAuditId] = useState(null); const [showAddAudit, setShowAddAudit] = useState(false);
-  const [naTitle, setNaTitle] = useState(""); const [naDate, setNaDate] = useState("");
-  const [auditFilterSec, setAuditFilterSec] = useState("all"); const [auditFilterScheme, setAuditFilterScheme] = useState("all");
-  const [exportScope, setExportScope] = useState("all");
-  const [evDraft, setEvDraft] = useState({ itemId: null, label: "", url: "" });
+  const [roleFilter, setRoleFilter] = useState("all");
 
   // Auto-refresh data every 30 seconds so changes show up across devices
   useEffect(() => {
-    const interval = setInterval(() => { refreshEmps(); refreshDocs(); refreshObSubs(); refreshAudits(); }, 30000);
+    const interval = setInterval(() => { refreshEmps(); refreshDocs(); refreshObSubs(); }, 30000);
     return () => clearInterval(interval);
-  }, [refreshEmps, refreshDocs, refreshObSubs, refreshAudits]);
+  }, [refreshEmps, refreshDocs, refreshObSubs]);
 
   const t = T[lang] || T.en;
-  const loaded = eL && dL && sL && obDL && obSL && auL;
+  const loaded = eL && dL && sL && obDL && obSL;
   const isEmp = auth?.role === "employee";
   const empSelf = isEmp ? emps.find(e => e.id === auth.id) : null;
   const sel = emps.find(e => e.id === selId);
@@ -1102,44 +820,6 @@ export default function App() {
     await saveObSub({ ...sub, status: "rejected", manager_notes: notes, reviewed_at: new Date().toISOString(), reviewed_by: "manager" });
     setObReviewId(null);
   };
-
-  // ── Audit handlers ──
-  const auditCtx = { emps, docs, obSubs };
-  const addAudit = async () => {
-    const audit = {
-      id: "a" + Date.now(), scheme: "unified",
-      title: naTitle.trim() || `Compliance Audit ${new Date().getFullYear()}`,
-      auditDate: naDate || "", status: "planning", items: buildAuditItems(),
-    };
-    await saveAudit(audit);
-    setNaTitle(""); setNaDate(""); setShowAddAudit(false);
-    setSelAuditId(audit.id); setView("auditDetail");
-  };
-  const updateAuditItem = async (auditId, itemId, updates) => {
-    const audit = audits.find(a => a.id === auditId); if (!audit) return;
-    await saveAudit({ ...audit, items: audit.items.map(i => i.id === itemId ? { ...i, ...updates } : i) });
-  };
-  const cycleAuditStatus = (auditId, item) => {
-    const idx = AUDIT_STAT_ORDER.indexOf(item.status || "not_started");
-    const next = AUDIT_STAT_ORDER[(idx + 1) % AUDIT_STAT_ORDER.length];
-    updateAuditItem(auditId, item.id, { status: next });
-  };
-  const addAuditEvidence = async (auditId, itemId) => {
-    if (!evDraft.url.trim() && !evDraft.label.trim()) return;
-    const audit = audits.find(a => a.id === auditId); if (!audit) return;
-    const item = audit.items.find(i => i.id === itemId); if (!item) return;
-    const entry = evDraft.url.trim()
-      ? { type: "link", label: evDraft.label.trim() || "Evidence", url: evDraft.url.trim() }
-      : { type: "note", text: evDraft.label.trim() };
-    await updateAuditItem(auditId, itemId, { evidence: [...(item.evidence || []), entry] });
-    setEvDraft({ itemId, label: "", url: "" });
-  };
-  const removeAuditEvidence = async (auditId, itemId, idx) => {
-    const audit = audits.find(a => a.id === auditId); if (!audit) return;
-    const item = audit.items.find(i => i.id === itemId); if (!item) return;
-    await updateAuditItem(auditId, itemId, { evidence: (item.evidence || []).filter((_, i) => i !== idx) });
-  };
-  const removeAudit = async (id) => { await deleteAudit(id); if (selAuditId === id) { setSelAuditId(null); setView("audits"); } };
 
   const getEmpObProgress = (empId) => {
     if (!obDocs.length) return { total: 0, done: 0, pct: 0, hasFlagged: false };
@@ -1335,7 +1015,8 @@ export default function App() {
   const activeEmps = emps.filter(e => !e.archived);
   const displayEmps = showArchived ? emps : activeEmps;
   const pickEmps = activeEmps.filter(e => e.trackPickRate !== false);
-  const avgPick = pickEmps.length ? Math.round(pickEmps.reduce((s, e) => s + (e.pickHistory.length ? e.pickHistory[e.pickHistory.length - 1].rate : 0), 0) / pickEmps.length) : 0;
+  const pickEmpsWithData = pickEmps.filter(e => e.pickHistory.length > 0 && e.pickHistory[e.pickHistory.length - 1].rate > 0);
+  const avgPick = pickEmpsWithData.length ? Math.round(pickEmpsWithData.reduce((s, e) => s + e.pickHistory[e.pickHistory.length - 1].rate, 0) * 10 / pickEmpsWithData.length) / 10 : 0;
   const avgDoc = activeEmps.length ? Math.round(activeEmps.reduce((s, e) => s + docPct(e.docChecks, getAssignedDocs(docs, e.id)), 0) / activeEmps.length) : 0;
   const fullC = activeEmps.filter(e => docPct(e.docChecks, getAssignedDocs(docs, e.id)) === 100).length;
   const needA = activeEmps.filter(e => { const last = e.pickHistory[e.pickHistory.length - 1]; if (!last) return true; return last.rate < getTarget(last.wk) || docPct(e.docChecks, getAssignedDocs(docs, e.id)) < 40; }).length;
@@ -1349,7 +1030,6 @@ export default function App() {
           <button style={nb(view === "employees" || view === "detail")} onClick={() => setView("employees")}>{t.employees}</button>
           {isManager && <button style={nb(view === "documents")} onClick={() => setView("documents")}>{t.documents}</button>}
           <button style={nb(view === "onboarding")} onClick={() => setView("onboarding")}>Onboarding</button>
-          {isManager && <button style={nb(view === "audits" || view === "auditDetail")} onClick={() => setView("audits")}>Audits</button>}
           {isManager && <button onClick={() => exportXLS(emps, docs, t)} style={{ padding: "9px 16px", borderRadius: 8, border: "none", background: "rgba(34,197,94,0.15)", color: C.green, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>📊 {t.exportExcel}</button>}
           <div style={{ width: 1, height: 24, background: C.border, margin: "0 4px" }} /><LangSel lang={lang} setLang={setLang} />
           <button onClick={() => setAuth(null)} style={{ ...nb(false), color: C.red, fontSize: 12 }}>{t.signOut}</button>
@@ -1379,12 +1059,18 @@ export default function App() {
         </div>)}
 
         {view === "employees" && (<div>
+          {(() => { const roles = [...new Set(displayEmps.map(e => e.role))].sort(); return (<>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
             <div><h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>{t.employees}</h2><p style={{ color: C.textMuted, fontSize: 13 }}>{activeEmps.length} {t.teamMembers}{emps.length !== activeEmps.length ? ` · ${emps.length - activeEmps.length} archived` : ""}</p></div>
-            <div style={{ display: "flex", gap: 10, alignItems: "center" }}><input placeholder={t.search} value={search} onChange={e => setSearch(e.target.value)} style={{ ...inp, width: 170 }} />{isManager && <button onClick={() => setShowArchived(!showArchived)} style={{ padding: "7px 12px", borderRadius: 7, border: `1px solid ${C.border}`, background: showArchived ? C.amberSoft : "transparent", color: showArchived ? C.amber : C.textDim, fontWeight: 600, fontSize: 11, cursor: "pointer" }}>{showArchived ? "Hide Archived" : "Show Archived"}</button>}{isManager && <button onClick={() => setShowAE(true)} style={{ padding: "9px 18px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{t.add}</button>}</div>
+            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <select value={roleFilter} onChange={e => setRoleFilter(e.target.value)} style={{ padding: "8px 12px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.surfaceAlt, color: C.text, fontSize: 12, outline: "none", cursor: "pointer", fontFamily: "inherit" }}><option value="all">All Roles</option>{roles.map(r => <option key={r} value={r}>{r}</option>)}</select>
+              <input placeholder={t.search} value={search} onChange={e => setSearch(e.target.value)} style={{ ...inp, width: 170 }} />
+              {isManager && <button onClick={() => setShowArchived(!showArchived)} style={{ padding: "7px 12px", borderRadius: 7, border: `1px solid ${C.border}`, background: showArchived ? C.amberSoft : "transparent", color: showArchived ? C.amber : C.textDim, fontWeight: 600, fontSize: 11, cursor: "pointer" }}>{showArchived ? "Hide Archived" : "Show Archived"}</button>}
+              {isManager && <button onClick={() => setShowAE(true)} style={{ padding: "9px 18px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{t.add}</button>}
+            </div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(275px, 1fr))", gap: 14 }}>
-            {displayEmps.filter(e => e.name.toLowerCase().includes(search.toLowerCase()) || e.role.toLowerCase().includes(search.toLowerCase())).map(emp => { const ad = getAssignedDocs(docs, emp.id); const dp = docPct(emp.docChecks, ad); const last = emp.pickHistory[emp.pickHistory.length - 1]; const lp = last ? last.rate : 0; const tgt = getTarget(last ? last.wk : 0); const met = lp >= tgt;
+            {displayEmps.filter(e => (roleFilter === "all" || e.role === roleFilter) && (e.name.toLowerCase().includes(search.toLowerCase()) || e.role.toLowerCase().includes(search.toLowerCase()))).map(emp => { const ad = getAssignedDocs(docs, emp.id); const dp = docPct(emp.docChecks, ad); const last = emp.pickHistory[emp.pickHistory.length - 1]; const lp = last ? last.rate : 0; const tgt = getTarget(last ? last.wk : 0); const met = lp >= tgt;
               return (<div key={emp.id} onClick={() => { setSelId(emp.id); setView("detail"); }} style={{ ...card, cursor: "pointer", transition: "border-color 0.2s", opacity: emp.archived ? 0.5 : 1 }} onMouseEnter={e => e.currentTarget.style.borderColor = C.accent} onMouseLeave={e => e.currentTarget.style.borderColor = C.border}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}><div><div style={{ fontWeight: 700, fontSize: 15, marginBottom: 2 }}>{emp.name}{emp.archived ? " (Archived)" : ""}</div><div style={{ color: C.textMuted, fontSize: 12 }}>{emp.role}</div></div><Ring percent={dp} size={42} stroke={4} color={dp === 100 ? C.green : dp >= 50 ? C.amber : C.red} /></div>
                 <div style={{ marginTop: 14, display: "flex", justifyContent: "space-between" }}><div><span style={{ fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", color: met ? C.green : C.red }}>{typeof lp === "number" ? lp.toFixed(1) : lp}</span><span style={{ fontSize: 11, color: C.textDim }}>/{typeof tgt === "number" ? tgt.toFixed(1) : tgt}</span></div><span style={{ fontSize: 11, color: C.textMuted, fontFamily: "'JetBrains Mono', monospace" }}>{dp}%</span></div>
@@ -1397,12 +1083,13 @@ export default function App() {
             <div style={{ marginBottom: 16 }}><label onClick={() => sNTP(!nTP)} style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", padding: "10px 12px", borderRadius: 8, background: nTP ? C.accentSoft : C.surfaceAlt, border: `1px solid ${nTP ? C.accent : C.border}` }}><div style={{ width: 20, height: 20, borderRadius: 5, border: `2px solid ${nTP ? C.accent : C.textDim}`, background: nTP ? C.accent : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{nTP && <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6L5 8.5L9.5 3.5" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>}</div><span style={{ fontWeight: 600, fontSize: 13, color: nTP ? C.accent : C.textMuted }}>{t.trackPickRate || "Track Pick Rate"}</span></label></div>
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}><button onClick={() => setShowAE(false)} style={{ padding: "9px 18px", borderRadius: 8, border: `1px solid ${C.border}`, background: "transparent", color: C.textMuted, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{t.cancel}</button><button onClick={addE} style={{ padding: "9px 22px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer", opacity: nN.trim() && nP.trim() ? 1 : 0.4 }}>{t.add}</button></div>
           </Modal>}
+        </>); })()}
         </div>)}
 
         {view === "documents" && (<div>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
             <div><h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>{t.documents}</h2><p style={{ color: C.textMuted, fontSize: 13 }}>{t.docManageDesc}</p></div>
-            <button onClick={() => setShowAD(true)} style={{ padding: "9px 18px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{t.addDocument}</button>
+            <div style={{ display: "flex", gap: 8 }}><button onClick={() => exportDocProgress(activeEmps, docs)} style={{ padding: "9px 16px", borderRadius: 8, border: "none", background: "rgba(34,197,94,0.15)", color: C.green, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>📊 Export Progress</button><button onClick={() => setShowAD(true)} style={{ padding: "9px 18px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{t.addDocument}</button></div>
           </div>
           {["sop", "contract"].map(type => { const td = docs.filter(d => d.type === type); if (!td.length) return null; return (<div key={type} style={{ marginBottom: 24 }}><div style={{ ...lbl, marginBottom: 10, fontSize: 12 }}>{type === "sop" ? t.sops : t.contracts}</div><div style={{ display: "flex", flexDirection: "column", gap: 6 }}>{td.map(doc => { const aEmps = emps.filter(e => doc.assignedTo?.includes("all") || doc.assignedTo?.includes(e.id)); const sc = aEmps.filter(e => e.docChecks[doc.id]).length; return (<div key={doc.id} style={{ ...card, padding: "14px 18px" }}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}><div style={{ flex: 1, minWidth: 200 }}><div style={{ fontWeight: 600, fontSize: 14 }}>{doc.type === "contract" ? "📝" : "📄"} {doc.name}</div><div style={{ fontSize: 11, color: C.textMuted, marginTop: 3 }}>{sc}/{aEmps.length} {doc.type === "contract" ? t.signed : t.reviewed}{doc.contractText ? " · 📋" : ""}{doc.url && <> · <a href={doc.url} target="_blank" rel="noopener noreferrer" style={{ color: C.accent, textDecoration: "none" }}>{t.viewDoc}↗</a></>}</div></div><div style={{ display: "flex", gap: 6 }}><button onClick={() => setShowAssign(doc.id)} style={{ padding: "5px 12px", borderRadius: 6, border: `1px solid ${C.border}`, background: "transparent", color: C.accent, fontWeight: 600, fontSize: 11, cursor: "pointer" }}>{t.assignDocs}</button><button onClick={() => { if (window.confirm(`${t.remove} "${doc.name}"?`)) remD(doc.id); }} style={{ background: C.redSoft, border: "none", color: C.red, padding: "5px 12px", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>{t.remove}</button></div></div><div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 6 }}>{aEmps.map(emp => { const chk = emp.docChecks[doc.id]; const st = chk?.status; const isSigned = st === "signed"; const isOpened = st === "opened"; const chipBg = isSigned ? C.greenSoft : (isOpened ? C.amberSoft : (chk ? C.greenSoft : C.redSoft)); const chipColor = isSigned ? C.green : (isOpened ? C.amber : (chk ? C.green : C.red)); const chipIcon = isSigned ? "✓" : (isOpened ? "◎" : (chk ? "✓" : "✗")); return (<div key={emp.id} style={{ padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 600, background: chipBg, color: chipColor }}>{emp.name.split(" ")[0]} {chipIcon}</div>); })}</div></div>); })}</div></div>); })}
           {showAssign && (() => { const doc = docs.find(d => d.id === showAssign); if (!doc) return null; const isAll = doc.assignedTo?.includes("all"); return (<Modal onClose={() => setShowAssign(null)}><h3 style={{ fontSize: 17, fontWeight: 700, marginBottom: 6 }}>{t.assignDocs}</h3><div style={{ color: C.textMuted, fontSize: 13, marginBottom: 18 }}>{doc.name}</div><div style={{ marginBottom: 12 }}><label onClick={() => toggleAssign(doc.id, "all")} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: 8, background: isAll ? C.accentSoft : C.surfaceAlt, border: `1px solid ${isAll ? C.accent : C.border}`, cursor: "pointer", marginBottom: 8 }}><div style={{ width: 20, height: 20, borderRadius: 5, border: `2px solid ${isAll ? C.accent : C.textDim}`, background: isAll ? C.accent : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{isAll && <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6L5 8.5L9.5 3.5" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>}</div><span style={{ fontWeight: 600, fontSize: 13, color: isAll ? C.accent : C.text }}>{t.allEmployees}</span></label>{!isAll && emps.map(emp => { const assigned = doc.assignedTo?.includes(emp.id); return (<label key={emp.id} onClick={() => toggleAssign(doc.id, emp.id)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderRadius: 8, background: assigned ? C.greenSoft : C.surfaceAlt, border: `1px solid ${assigned ? "rgba(34,197,94,0.18)" : C.border}`, cursor: "pointer", marginBottom: 5 }}><div style={{ width: 20, height: 20, borderRadius: 5, border: `2px solid ${assigned ? C.green : C.textDim}`, background: assigned ? C.green : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{assigned && <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6L5 8.5L9.5 3.5" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>}</div><div><div style={{ fontWeight: 600, fontSize: 13 }}>{emp.name}</div><div style={{ fontSize: 11, color: C.textMuted }}>{emp.role}</div></div></label>); })}</div><div style={{ textAlign: "right" }}><button onClick={() => setShowAssign(null)} style={{ padding: "9px 18px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{t.close}</button></div></Modal>); })()}
@@ -1500,134 +1187,6 @@ export default function App() {
           )}
         </div>)}
 
-        {/* ═══ AUDITS (Manager) ═══ */}
-        {view === "audits" && (<div>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, flexWrap: "wrap", gap: 12 }}>
-            <div><h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>Audits</h2><p style={{ color: C.textMuted, fontSize: 13 }}>One framework covering Red Tractor, LEAF, SMETA, Irish Organic & seasonal-worker audits</p></div>
-            <button onClick={() => setShowAddAudit(true)} style={{ padding: "9px 18px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>+ New Audit</button>
-          </div>
-          <div style={{ padding: "10px 14px", borderRadius: 10, background: C.accentSoft, border: `1px solid ${C.border}`, color: C.textMuted, fontSize: 12.5, lineHeight: 1.6, marginBottom: 22 }}>
-            <strong style={{ color: C.text }}>Prepare once, comply many.</strong> A single checklist where every requirement is tagged with the schemes it satisfies. Fill in the evidence once — filter or export per scheme when each auditor arrives. Items marked <span style={{ color: C.accent, fontWeight: 600 }}>Auto</span> verify themselves live from your worker records, signed contracts, SOP reviews and onboarding data.
-          </div>
-          {audits.length === 0 ? (
-            <div style={{ ...card, textAlign: "center", padding: 48, color: C.textMuted }}>No audits yet. Create one to start tracking readiness.</div>
-          ) : (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 14 }}>
-              {audits.map(a => { const pct = auditProgress(a, auditCtx); const attn = (a.items || []).filter(i => auditItemStatus(i, auditCtx) === "attention").length;
-                return (<div key={a.id} onClick={() => { setSelAuditId(a.id); setView("auditDetail"); }} style={{ ...card, cursor: "pointer", transition: "border-color 0.2s" }} onMouseEnter={e => e.currentTarget.style.borderColor = C.accent} onMouseLeave={e => e.currentTarget.style.borderColor = C.border}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                    <div style={{ flex: 1 }}><Badge color={C.accent} bg={C.accentSoft}>Combined</Badge><div style={{ fontWeight: 700, fontSize: 15, margin: "10px 0 2px" }}>{a.title}</div><div style={{ color: C.textMuted, fontSize: 12 }}>{a.auditDate ? `📅 ${a.auditDate}` : "Date not set"}</div></div>
-                    <Ring percent={pct} size={48} stroke={4} color={pct === 100 ? C.green : pct >= 50 ? C.amber : C.red} />
-                  </div>
-                  <div style={{ marginTop: 12, display: "flex", flexWrap: "wrap", gap: 5 }}>{Object.entries(AUDIT_SCHEME_TAGS).map(([k, s]) => { const p = auditSchemeProgress(a, k, auditCtx); return (<span key={k} title={`${s.name}: ${p ? p.pct + "% ready" : "n/a"}`} style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 99, color: s.color, background: `${s.color}1a` }}>{s.short} {p ? `${p.pct}%` : "—"}</span>); })}</div>
-                  <div style={{ marginTop: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span style={{ fontSize: 12, color: C.textMuted }}>{(a.items || []).length} requirements</span>
-                    {attn > 0 ? <Badge color={C.red} bg={C.redSoft}>{attn} need attention</Badge> : <Badge color={C.green} bg={C.greenSoft}>{pct}% ready</Badge>}
-                  </div>
-                </div>); })}
-            </div>
-          )}
-          {showAddAudit && <Modal onClose={() => setShowAddAudit(false)}>
-            <h3 style={{ fontSize: 17, fontWeight: 700, marginBottom: 6 }}>New Audit</h3>
-            <p style={{ color: C.textMuted, fontSize: 12.5, lineHeight: 1.6, marginBottom: 18 }}>Creates one combined checklist covering all schemes (Red Tractor, LEAF, SMETA, Irish Organic & seasonal-worker). You can filter and export per scheme afterwards.</p>
-            <div style={{ marginBottom: 12 }}><label style={lbl}>Audit Title</label><input value={naTitle} onChange={e => setNaTitle(e.target.value)} placeholder={`e.g. Compliance Audit ${new Date().getFullYear()}`} style={inp} /></div>
-            <div style={{ marginBottom: 16 }}><label style={lbl}>Audit Date (optional)</label><input type="date" value={naDate} onChange={e => setNaDate(e.target.value)} style={inp} /></div>
-            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}><button onClick={() => setShowAddAudit(false)} style={{ padding: "9px 18px", borderRadius: 8, border: `1px solid ${C.border}`, background: "transparent", color: C.textMuted, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{t.cancel}</button><button onClick={addAudit} style={{ padding: "9px 22px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>Create</button></div>
-          </Modal>}
-        </div>)}
-
-        {/* ═══ AUDIT DETAIL (Manager) ═══ */}
-        {view === "auditDetail" && (() => {
-          const audit = audits.find(a => a.id === selAuditId);
-          if (!audit) return <div style={{ ...card, textAlign: "center", color: C.textMuted }}>Audit not found.<div style={{ marginTop: 12 }}><button onClick={() => setView("audits")} style={nb(false)}>← Back to Audits</button></div></div>;
-          const pct = auditProgress(audit, auditCtx);
-          const sections = UNIFIED_FRAMEWORK;
-          const shownItems = (audit.items || []).filter(i =>
-            (auditFilterSec === "all" || i.section === auditFilterSec) &&
-            (auditFilterScheme === "all" || (i.schemes || []).includes(auditFilterScheme)));
-          return (<div>
-            <button onClick={() => setView("audits")} style={{ background: "transparent", border: "none", color: C.accent, cursor: "pointer", fontSize: 13, fontWeight: 600, marginBottom: 18, padding: 0 }}>← Back to Audits</button>
-            <div style={{ ...card, marginBottom: 20 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16 }}>
-                <div style={{ flex: 1, minWidth: 220 }}>
-                  <Badge color={C.accent} bg={C.accentSoft}>Combined Audit</Badge>
-                  <h2 style={{ fontSize: 22, fontWeight: 700, margin: "10px 0 4px" }}>{audit.title}</h2>
-                  <div style={{ color: C.textMuted, fontSize: 13 }}>Covers all schemes{audit.auditDate ? ` · 📅 ${audit.auditDate}` : ""}</div>
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-                  <div style={{ textAlign: "center" }}><Ring percent={pct} size={56} stroke={5} color={pct === 100 ? C.green : pct >= 50 ? C.amber : C.red} /><div style={{ fontSize: 11, color: C.textMuted, marginTop: 4 }}>{pct}% ready</div></div>
-                </div>
-              </div>
-              {/* Per-scheme readiness summary — the "comply many" payoff */}
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 8, marginTop: 16 }}>
-                {Object.entries(AUDIT_SCHEME_TAGS).map(([k, s]) => { const p = auditSchemeProgress(audit, k, auditCtx); const pp = p ? p.pct : 0; return (
-                  <div key={k} onClick={() => setAuditFilterScheme(auditFilterScheme === k ? "all" : k)} title="Filter by this scheme" style={{ padding: "10px 12px", borderRadius: 10, background: C.surfaceAlt, border: `1px solid ${auditFilterScheme === k ? s.color : C.border}`, cursor: "pointer" }}>
-                    <div style={{ fontSize: 11, fontWeight: 700, color: s.color }}>{s.name}</div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
-                      <div style={{ flex: 1, height: 5, background: C.border, borderRadius: 99, overflow: "hidden" }}><div style={{ width: `${pp}%`, height: "100%", background: pp === 100 ? C.green : pp >= 50 ? C.amber : C.red, borderRadius: 99 }} /></div>
-                      <span style={{ fontSize: 10, fontFamily: "'JetBrains Mono', monospace", color: C.textMuted }}>{p ? `${p.ready}/${p.total}` : "—"}</span>
-                    </div>
-                  </div>); })}
-              </div>
-              <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap", alignItems: "center" }}>
-                <select value={exportScope} onChange={e => setExportScope(e.target.value)} style={{ padding: "9px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surfaceAlt, color: C.text, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>
-                  <option value="all">All schemes</option>
-                  {Object.entries(AUDIT_SCHEME_TAGS).map(([k, s]) => <option key={k} value={k}>{s.name}</option>)}
-                </select>
-                <button onClick={() => exportAuditPack(audit, auditCtx, emps, docs, exportScope)} style={{ padding: "9px 16px", borderRadius: 8, border: "none", background: "rgba(34,197,94,0.15)", color: C.green, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>📊 Export Audit Pack</button>
-                <select value={audit.status} onChange={e => saveAudit({ ...audit, status: e.target.value })} style={{ padding: "9px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surfaceAlt, color: C.text, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>
-                  <option value="planning">Planning</option><option value="in_progress">In Progress</option><option value="complete">Complete</option>
-                </select>
-                <button onClick={() => { if (window.confirm(`Delete audit "${audit.title}"?`)) removeAudit(audit.id); }} style={{ marginLeft: "auto", padding: "9px 14px", borderRadius: 8, border: "none", background: C.redSoft, color: C.red, fontWeight: 600, fontSize: 12, cursor: "pointer" }}>Delete</button>
-              </div>
-            </div>
-            <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
-              <span style={{ fontSize: 11, color: C.textDim, textTransform: "uppercase", letterSpacing: 0.6, fontWeight: 600, marginRight: 4 }}>Scheme:</span>
-              <button onClick={() => setAuditFilterScheme("all")} style={{ ...nb(auditFilterScheme === "all"), padding: "5px 11px", fontSize: 12 }}>All</button>
-              {Object.entries(AUDIT_SCHEME_TAGS).map(([k, s]) => (<button key={k} onClick={() => setAuditFilterScheme(k)} style={{ padding: "5px 11px", borderRadius: 8, border: "none", fontWeight: 600, fontSize: 12, cursor: "pointer", color: auditFilterScheme === k ? "#fff" : s.color, background: auditFilterScheme === k ? s.color : `${s.color}1a` }}>{s.name}</button>))}
-            </div>
-            <div style={{ display: "flex", gap: 6, marginBottom: 18, flexWrap: "wrap", alignItems: "center" }}>
-              <span style={{ fontSize: 11, color: C.textDim, textTransform: "uppercase", letterSpacing: 0.6, fontWeight: 600, marginRight: 4 }}>Category:</span>
-              <button onClick={() => setAuditFilterSec("all")} style={{ ...nb(auditFilterSec === "all"), padding: "5px 11px", fontSize: 12 }}>All</button>
-              {sections.map(s => (<button key={s.id} onClick={() => setAuditFilterSec(s.id)} style={{ ...nb(auditFilterSec === s.id), padding: "5px 11px", fontSize: 12 }}>{s.name}</button>))}
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {shownItems.map(item => {
-                const eff = auditItemStatus(item, auditCtx); const st = AUDIT_STAT[eff];
-                const ev = item.auto ? autoEvaluateAudit(item.auto, emps, docs, obSubs) : null;
-                return (<div key={item.id} style={{ ...card, padding: "16px 18px" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
-                    <div style={{ flex: 1, minWidth: 220 }}>
-                      <div style={{ fontWeight: 600, fontSize: 14 }}>{item.req}{item.auto && <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, color: C.accent, background: C.accentSoft, padding: "2px 7px", borderRadius: 99, textTransform: "uppercase", letterSpacing: 0.5 }}>Auto</span>}</div>
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 6 }}>{(item.schemes || []).map(k => { const s = AUDIT_SCHEME_TAGS[k]; if (!s) return null; return <span key={k} title={s.name} style={{ fontSize: 9.5, fontWeight: 700, padding: "1px 6px", borderRadius: 99, color: s.color, background: `${s.color}1a` }}>{s.short}</span>; })}</div>
-                      {item.guidance && <div style={{ fontSize: 12, color: C.textMuted, marginTop: 6, lineHeight: 1.55 }}>{item.guidance}</div>}
-                      {ev && <div style={{ fontSize: 12, color: st.color, marginTop: 6, fontWeight: 500 }}>● {ev.detail}</div>}
-                    </div>
-                    {item.auto
-                      ? <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}><Badge color={st.color} bg={st.bg}>{st.label}{ev?.metric ? ` · ${ev.metric}` : ""}</Badge><button onClick={() => updateAuditItem(audit.id, item.id, { status: item.status === "na" ? "not_started" : "na" })} style={{ background: "transparent", border: `1px solid ${C.border}`, color: C.textMuted, padding: "3px 8px", borderRadius: 6, fontSize: 10, fontWeight: 600, cursor: "pointer" }}>{item.status === "na" ? "Use auto" : "Mark N/A"}</button></div>
-                      : <button onClick={() => cycleAuditStatus(audit.id, item)} title="Click to change status" style={{ border: "none", cursor: "pointer", padding: "4px 12px", borderRadius: 99, fontSize: 11, fontWeight: 600, color: st.color, background: st.bg }}>{st.label} ▾</button>}
-                  </div>
-                  <div style={{ marginTop: 12 }}>
-                    {auditFolderUrl(item.id) && <a href={auditFolderUrl(item.id)} target="_blank" rel="noopener noreferrer" title="Open this requirement's OneDrive evidence folder" style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, color: C.accent, textDecoration: "none", background: C.accentSoft, border: `1px solid ${C.border}`, padding: "6px 11px", borderRadius: 7, marginBottom: 8, marginRight: 8 }}>📁 Evidence folder ↗</a>}
-                    {(item.evidence || []).length > 0 && <div style={{ display: "flex", flexDirection: "column", gap: 5, marginBottom: 8 }}>{(item.evidence || []).map((e, idx) => (<div key={idx} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, background: C.surfaceAlt, borderRadius: 7, padding: "6px 10px" }}><span style={{ flex: 1 }}>{e.type === "link" ? <a href={e.url} target="_blank" rel="noopener noreferrer" style={{ color: C.accent, textDecoration: "none" }}>🔗 {e.label} ↗</a> : <span style={{ color: C.text }}>📝 {e.text}</span>}</span><button onClick={() => removeAuditEvidence(audit.id, item.id, idx)} style={{ background: "transparent", border: "none", color: C.textDim, cursor: "pointer", fontSize: 14 }}>✕</button></div>))}</div>}
-                    {evDraft.itemId === item.id ? (
-                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-                        <input value={evDraft.label} onChange={e => setEvDraft({ ...evDraft, label: e.target.value })} placeholder="Label / note" style={{ ...inp, flex: 1, minWidth: 120, padding: "7px 10px", fontSize: 12 }} />
-                        <input value={evDraft.url} onChange={e => setEvDraft({ ...evDraft, url: e.target.value })} placeholder="Link URL (optional)" style={{ ...inp, flex: 1, minWidth: 120, padding: "7px 10px", fontSize: 12 }} />
-                        <button onClick={() => addAuditEvidence(audit.id, item.id)} style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 12, cursor: "pointer" }}>Add</button>
-                        <button onClick={() => setEvDraft({ itemId: null, label: "", url: "" })} style={{ padding: "7px 12px", borderRadius: 7, border: `1px solid ${C.border}`, background: "transparent", color: C.textMuted, fontSize: 12, cursor: "pointer" }}>{t.cancel}</button>
-                      </div>
-                    ) : (
-                      <button onClick={() => setEvDraft({ itemId: item.id, label: "", url: "" })} style={{ background: "transparent", border: `1px dashed ${C.border}`, color: C.accent, padding: "6px 12px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ Add evidence</button>
-                    )}
-                    <textarea value={item.notes || ""} onChange={e => updateAuditItem(audit.id, item.id, { notes: e.target.value })} placeholder="Notes for the auditor…" rows={2} style={{ ...inp, marginTop: 8, resize: "vertical", fontSize: 12, lineHeight: 1.5 }} />
-                  </div>
-                </div>);
-              })}
-            </div>
-          </div>);
-        })()}
-
         {view === "detail" && sel && (() => {
           const ad = getAssignedDocs(docs, sel.id); const dp = docPct(sel.docChecks, ad);
           const showPick = sel.trackPickRate !== false;
@@ -1642,7 +1201,7 @@ export default function App() {
               <div style={card}><label style={lbl}>{t.managerNotes}</label><div style={{ fontSize: 11, color: C.textDim, marginBottom: 6 }}>✓ {t.employees.toLowerCase()} can see</div><textarea value={sel.notes || ""} onChange={e => updE(sel.id, { notes: e.target.value })} placeholder={t.notesPlaceholder} rows={4} style={{ ...inp, resize: "vertical", lineHeight: 1.5 }} onBlur={() => saveEmp(sel)} /></div>
               {isManager && <div style={{ ...card, borderColor: "rgba(239,68,68,0.2)" }}><label style={{ ...lbl, color: C.red }}>{t.privateNotes}</label><div style={{ fontSize: 11, color: C.textDim, marginBottom: 6 }}>🔒</div><textarea value={sel.privateNotes || ""} onChange={e => updE(sel.id, { privateNotes: e.target.value })} placeholder={t.privateNotesPlaceholder} rows={4} style={{ ...inp, resize: "vertical", lineHeight: 1.5, borderColor: "rgba(239,68,68,0.15)" }} onBlur={() => saveEmp(sel)} /></div>}
             </div>
-            {showAP && <Modal onClose={() => setShowAP(false)}><h3 style={{ fontSize: 17, fontWeight: 700, marginBottom: 18 }}>{t.addPickRate}</h3><div style={{ marginBottom: 12 }}><label style={lbl}>{t.weekNumber}</label><input type="number" min="1" value={nPW} onChange={e => sNPW(e.target.value)} placeholder="e.g. 5" style={inp} />{nPW && parseInt(nPW) > 0 && <div style={{ fontSize: 11, color: C.targetYellow, marginTop: 4 }}>{t.target}: {getTarget(parseInt(nPW))} kg/hr</div>}</div><div style={{ marginBottom: 12 }}><label style={lbl}>{t.weekStarting}</label><input type="date" value={nPD} onChange={e => sNPD(e.target.value)} style={inp} /></div><div style={{ marginBottom: 20 }}><label style={lbl}>{t.pickRate0100}</label><input type="number" min="0" max="35" step="0.1" value={nPR} onChange={e => sNPR(e.target.value)} placeholder="e.g. 18.5" style={inp} /></div><div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}><button onClick={() => setShowAP(false)} style={{ padding: "9px 18px", borderRadius: 8, border: `1px solid ${C.border}`, background: "transparent", color: C.textMuted, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{t.cancel}</button><button onClick={addPk} style={{ padding: "9px 22px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer", opacity: nPR && nPW ? 1 : 0.4 }}>{t.add}</button></div></Modal>}
+            {showAP && <Modal onClose={() => setShowAP(false)}><h3 style={{ fontSize: 17, fontWeight: 700, marginBottom: 18 }}>{t.addPickRate}</h3><div style={{ marginBottom: 12 }}><label style={lbl}>{t.weekNumber}</label><input type="number" min="1" value={nPW} onChange={e => sNPW(e.target.value)} placeholder="e.g. 5" style={inp} />{nPW && parseInt(nPW) > 0 && <div style={{ fontSize: 11, color: C.targetYellow, marginTop: 4 }}>{t.target}: {getTarget(parseInt(nPW))} kg/hr</div>}</div><div style={{ marginBottom: 12 }}><label style={lbl}>{t.weekEnding}</label><input type="date" value={nPD} onChange={e => sNPD(e.target.value)} style={inp} /></div><div style={{ marginBottom: 20 }}><label style={lbl}>{t.pickRate0100}</label><input type="number" min="0" max="35" step="0.1" value={nPR} onChange={e => sNPR(e.target.value)} placeholder="e.g. 18.5" style={inp} /></div><div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}><button onClick={() => setShowAP(false)} style={{ padding: "9px 18px", borderRadius: 8, border: `1px solid ${C.border}`, background: "transparent", color: C.textMuted, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{t.cancel}</button><button onClick={addPk} style={{ padding: "9px 22px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer", opacity: nPR && nPW ? 1 : 0.4 }}>{t.add}</button></div></Modal>}
           </div>);
         })()}
       </div>
