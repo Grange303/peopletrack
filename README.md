@@ -44,6 +44,14 @@ Items tagged **Auto** verify themselves live from existing PeopleTrack data:
 The module persists to a new Supabase table. Run [`supabase/audits.sql`](supabase/audits.sql)
 once in the Supabase SQL editor before using the Audits tab.
 
+## AI Assistant
+
+Managers get an **✨ Assistant** tab — a chat assistant with live access to
+team performance, document compliance and onboarding data (via
+`api/assistant.js`, using the existing `ANTHROPIC_API_KEY`). A companion
+weekly check-in routine tracks goals and deadlines from the
+[`assistant/`](assistant/README.md) folder.
+
 ## Develop
 
 ```bash

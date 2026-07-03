@@ -444,6 +444,99 @@ function PickChart({ history, width=340, height=160, t }) {
 function Badge({children,color,bg}){return<span style={{display:"inline-block",padding:"3px 10px",borderRadius:99,fontSize:11,fontWeight:600,color,background:bg}}>{children}</span>;}
 function Ring({percent,size=48,stroke=4,color}){const r=(size-stroke)/2,ci=2*Math.PI*r,off=ci-(percent/100)*ci;return(<svg width={size} height={size} style={{transform:"rotate(-90deg)"}}><circle cx={size/2} cy={size/2} r={r} fill="none" stroke={C.border} strokeWidth={stroke}/><circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth={stroke} strokeDasharray={ci} strokeDashoffset={off} strokeLinecap="round" style={{transition:"stroke-dashoffset 0.5s"}}/></svg>);}
 
+// ── AI Assistant (manager only) ──
+// Builds a plain-text snapshot of live app data for the assistant. PINs, usernames
+// and private notes are deliberately excluded.
+function buildAssistantContext(emps, docs, obDocs, obSubs) {
+  const active = emps.filter(e => !e.archived);
+  const lines = [`Date: ${todayDate()}`, `Team: ${active.length} active employees (${emps.length - active.length} archived)`, "", "EMPLOYEES:"];
+  active.forEach(emp => {
+    const ad = getAssignedDocs(docs, emp.id);
+    const dp = docPct(emp.docChecks, ad);
+    const last = emp.pickHistory[emp.pickHistory.length - 1];
+    const pick = emp.trackPickRate === false ? "pick rate not tracked" : last ? `pick rate ${last.rate}/${getTarget(last.wk)} kg/hr target (week ${last.wk})` : "no pick rate data yet";
+    const issues = [];
+    ad.forEach(d => {
+      const chk = emp.docChecks[d.id];
+      if (!chk) issues.push(`"${d.name}" not completed`);
+      else if (d.type === "contract" && chk.status && chk.status !== "signed") issues.push(`"${d.name}" opened but not signed`);
+      else if (d.type === "sop") {
+        const rs = getReviewStatus(chk, d.reviewMonths || 12);
+        if (rs === "overdue") issues.push(`"${d.name}" review overdue`);
+        else if (rs === "due_soon") issues.push(`"${d.name}" review due within 30 days`);
+      }
+    });
+    lines.push(`- ${emp.name} (${emp.role}, started ${emp.startDate || "unknown"}): ${pick}; documents ${dp}% complete${issues.length ? "; outstanding: " + issues.join(", ") : ""}`);
+  });
+  lines.push("", "DOCUMENTS:");
+  docs.forEach(d => {
+    const aEmps = emps.filter(e => !e.archived && (d.assignedTo?.includes("all") || d.assignedTo?.includes(e.id)));
+    const done = aEmps.filter(e => e.docChecks[d.id]).length;
+    lines.push(`- ${d.name} (${d.type.toUpperCase()}): ${done}/${aEmps.length} ${d.type === "contract" ? "signed" : "reviewed"}`);
+  });
+  const pending = obSubs.filter(s => !s.status || s.status === "pending").length;
+  const flagged = obSubs.filter(s => (s.flag_reasons || []).length > 0).length;
+  lines.push("", `ONBOARDING: ${obDocs.length} active documents; ${obSubs.length} submissions, ${pending} awaiting review, ${flagged} with flagged health/safety answers`);
+  return lines.join("\n");
+}
+
+function AssistantView({ emps, docs, obDocs, obSubs }) {
+  const [msgs, setMsgs] = useState([]);
+  const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const endRef = useRef(null);
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs, busy]);
+
+  const send = async () => {
+    const text = input.trim();
+    if (!text || busy) return;
+    const next = [...msgs, { role: "user", content: text }];
+    setMsgs(next); setInput(""); setBusy(true);
+    try {
+      const res = await fetch("/api/assistant", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: next, context: buildAssistantContext(emps, docs, obDocs, obSubs) })
+      });
+      const data = await res.json();
+      setMsgs(m => [...m, { role: "assistant", content: data.reply || `Error: ${data.error || "no reply"}${data.details ? ` — ${data.details}` : ""}` }]);
+    } catch (e) {
+      setMsgs(m => [...m, { role: "assistant", content: "Error: couldn't reach the assistant. " + e.message }]);
+    }
+    setBusy(false);
+  };
+
+  const suggestions = ["Who needs attention this week?", "What's outstanding before our next audit?", "Summarise team compliance", "Help me plan onboarding for new pickers"];
+  return (
+    <div>
+      <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>Assistant</h2>
+      <p style={{ color: C.textMuted, marginBottom: 20, fontSize: 13 }}>AI assistant with live access to your team, document and onboarding data</p>
+      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, display: "flex", flexDirection: "column", height: "62vh", minHeight: 380 }}>
+        <div style={{ flex: 1, overflowY: "auto", padding: 20, display: "flex", flexDirection: "column", gap: 12 }}>
+          {msgs.length === 0 && (
+            <div style={{ margin: "auto", textAlign: "center", maxWidth: 420 }}>
+              <div style={{ fontSize: 30, marginBottom: 10 }}>✨</div>
+              <div style={{ color: C.textMuted, fontSize: 13, marginBottom: 16 }}>Ask about team performance, compliance gaps, audit prep or planning. Try:</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {suggestions.map(s => <button key={s} onClick={() => setInput(s)} style={{ padding: "9px 14px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surfaceAlt, color: C.text, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>{s}</button>)}
+              </div>
+            </div>
+          )}
+          {msgs.map((m, i) => (
+            <div key={i} style={{ alignSelf: m.role === "user" ? "flex-end" : "flex-start", maxWidth: "85%", padding: "10px 14px", borderRadius: 12, fontSize: 13.5, lineHeight: 1.6, whiteSpace: "pre-wrap", background: m.role === "user" ? C.accent : C.surfaceAlt, color: m.role === "user" ? "#fff" : C.text, border: m.role === "user" ? "none" : `1px solid ${C.border}` }}>{m.content}</div>
+          ))}
+          {busy && <div style={{ alignSelf: "flex-start", padding: "10px 14px", borderRadius: 12, background: C.surfaceAlt, border: `1px solid ${C.border}`, color: C.textMuted, fontSize: 13 }}>Thinking…</div>}
+          <div ref={endRef} />
+        </div>
+        <div style={{ borderTop: `1px solid ${C.border}`, padding: 12, display: "flex", gap: 8 }}>
+          <textarea value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} placeholder="Ask your assistant… (Enter to send)" rows={1} style={{ flex: 1, padding: "10px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surfaceAlt, color: C.text, fontSize: 13.5, outline: "none", resize: "none", fontFamily: "inherit", lineHeight: 1.5 }} />
+          <button onClick={send} disabled={busy || !input.trim()} style={{ padding: "0 20px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer", opacity: busy || !input.trim() ? 0.4 : 1 }}>Send</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Onboarding: Employee Document View ──
 function OnboardingDocView({ doc, existing, empName, onSubmit, onCancel, t, defaultLang }) {
   const body = doc.body;
@@ -1030,6 +1123,7 @@ export default function App() {
           <button style={nb(view === "employees" || view === "detail")} onClick={() => setView("employees")}>{t.employees}</button>
           {isManager && <button style={nb(view === "documents")} onClick={() => setView("documents")}>{t.documents}</button>}
           <button style={nb(view === "onboarding")} onClick={() => setView("onboarding")}>Onboarding</button>
+          {isManager && <button style={nb(view === "assistant")} onClick={() => setView("assistant")}>✨ Assistant</button>}
           {isManager && <button onClick={() => exportXLS(emps, docs, t)} style={{ padding: "9px 16px", borderRadius: 8, border: "none", background: "rgba(34,197,94,0.15)", color: C.green, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>📊 {t.exportExcel}</button>}
           <div style={{ width: 1, height: 24, background: C.border, margin: "0 4px" }} /><LangSel lang={lang} setLang={setLang} />
           <button onClick={() => setAuth(null)} style={{ ...nb(false), color: C.red, fontSize: 12 }}>{t.signOut}</button>
@@ -1186,6 +1280,8 @@ export default function App() {
             </div>
           )}
         </div>)}
+
+        {view === "assistant" && isManager && <AssistantView emps={emps} docs={docs} obDocs={obDocs} obSubs={obSubs} />}
 
         {view === "detail" && sel && (() => {
           const ad = getAssignedDocs(docs, sel.id); const dp = docPct(sel.docChecks, ad);
