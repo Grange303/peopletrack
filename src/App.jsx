@@ -12,7 +12,9 @@ function useEmployees() {
     if (data) setEmps(data.map(e => ({
       id: e.id, name: e.name, role: e.role, pin: e.pin, username: e.username || "",
       accountType: e.account_type || "employee",
-      startDate: e.start_date, pickHistory: e.pick_history || [],
+      employmentType: e.employment_type || "permanent",
+      startDate: e.start_date, endDate: e.end_date || "",
+      pickHistory: e.pick_history || [],
       docChecks: e.doc_checks || {}, notes: e.notes || "", privateNotes: e.private_notes || "",
       trackPickRate: e.track_pick_rate !== false,
       archived: e.archived || false
@@ -26,7 +28,9 @@ function useEmployees() {
     await supabase.from("employees").upsert({
       id: emp.id, name: emp.name, role: emp.role, pin: emp.pin, username: emp.username || "",
       account_type: emp.accountType || "employee", archived: emp.archived || false,
-      start_date: emp.startDate, pick_history: emp.pickHistory,
+      employment_type: emp.employmentType || "permanent",
+      start_date: emp.startDate, end_date: emp.endDate || null,
+      pick_history: emp.pickHistory,
       doc_checks: emp.docChecks, notes: emp.notes, private_notes: emp.privateNotes,
       track_pick_rate: emp.trackPickRate !== false
     });
@@ -48,7 +52,9 @@ function useEmployees() {
         supabase.from("employees").upsert({
           id: emp.id, name: emp.name, role: emp.role, pin: emp.pin, username: emp.username || "",
           account_type: emp.accountType || "employee", archived: emp.archived || false,
-          start_date: emp.startDate, pick_history: emp.pickHistory,
+          employment_type: emp.employmentType || "permanent",
+          start_date: emp.startDate, end_date: emp.endDate || null,
+          pick_history: emp.pickHistory,
           doc_checks: emp.docChecks, notes: emp.notes, private_notes: emp.privateNotes,
           track_pick_rate: emp.trackPickRate !== false
         }).then(() => {});
@@ -152,35 +158,6 @@ function useOnboardingSubs() {
     await fetch_();
   }, [fetch_]);
   return { subs, loaded, saveSub, refresh: fetch_ };
-}
-
-// ── Audit hooks ──
-function useAudits() {
-  const [audits, setAudits] = useState([]);
-  const [loaded, setLoaded] = useState(false);
-  const fetch_ = useCallback(async () => {
-    const { data } = await supabase.from("audits").select("*");
-    if (data) setAudits(data.map(a => ({
-      id: a.id, scheme: a.scheme, title: a.title,
-      auditDate: a.audit_date || "", status: a.status || "planning",
-      items: a.items || [], createdAt: a.created_at
-    })).sort((x, y) => (y.createdAt || "").localeCompare(x.createdAt || "")));
-    setLoaded(true);
-  }, []);
-  useEffect(() => { fetch_(); }, [fetch_]);
-  const saveAudit = useCallback(async (a) => {
-    await supabase.from("audits").upsert({
-      id: a.id, scheme: a.scheme, title: a.title,
-      audit_date: a.auditDate || null, status: a.status || "planning",
-      items: a.items || []
-    });
-    await fetch_();
-  }, [fetch_]);
-  const deleteAudit = useCallback(async (id) => {
-    await supabase.from("audits").delete().eq("id", id);
-    await fetch_();
-  }, [fetch_]);
-  return { audits, loaded, saveAudit, deleteAudit, refresh: fetch_ };
 }
 
 // Flagging: check questionnaire answers for "yes" on flagged questions
@@ -351,300 +328,6 @@ function exportXLS(emps, docs, t) {
   XLSX.writeFile(wb, `PeopleTrack_${todayDate()}.xlsx`);
 }
 
-// ══════════════ AUDIT MODULE ══════════════
-// Status vocabulary used across audit checklist items.
-const AUDIT_STAT = {
-  not_started: { label: "Not started", color: "#7d829a", bg: "rgba(125,130,154,0.12)" },
-  in_progress: { label: "In progress", color: "#eab308", bg: "rgba(234,179,8,0.1)" },
-  ready:       { label: "Ready",       color: "#22c55e", bg: "rgba(34,197,94,0.1)" },
-  attention:   { label: "Attention",   color: "#ef4444", bg: "rgba(239,68,68,0.1)" },
-  na:          { label: "N/A",         color: "#4a4f65", bg: "rgba(74,79,101,0.12)" },
-};
-const AUDIT_STAT_ORDER = ["not_started", "in_progress", "ready", "na"];
-
-// The assurance schemes this app helps you prepare for. Each requirement in the
-// unified framework is tagged with the schemes it satisfies, so evidence is
-// gathered ONCE and counts toward every applicable audit ("prepare once,
-// comply many"). Add a new scheme here, then tag the relevant requirements.
-const AUDIT_SCHEME_TAGS = {
-  red_tractor: { name: "Red Tractor",     short: "RT",    color: "#e11d48" },
-  globalgap:   { name: "GLOBALG.A.P.",    short: "GG",    color: "#0891b2" },
-  leaf:        { name: "LEAF Marque",     short: "LEAF",  color: "#16a34a" },
-  sedex:       { name: "Sedex / SMETA",   short: "SMETA", color: "#8b5cf6" },
-  ioa:         { name: "Irish Organic",   short: "IOA",   color: "#f59e0b" },
-  seasonal:    { name: "Seasonal Worker", short: "SW",    color: "#3b82f6" },
-};
-
-// One unified compliance framework covering all schemes. Categories group
-// related controls; `schemes` lists which audits each control satisfies and
-// `auto` links it to live PeopleTrack data so it self-verifies.
-const UNIFIED_FRAMEWORK = [
-  { id: "mgmt", name: "Business & Management Systems", items: [
-    { id: "registration", req: "Scheme registration & valid certificates held", guidance: "Current membership/certificates for each scheme audited.", schemes: ["red_tractor", "globalgap", "leaf", "sedex", "ioa"] },
-    { id: "policies", req: "Documented policies & responsibilities assigned", guidance: "Written policies (quality, ethical, environmental) with named owners.", schemes: ["red_tractor", "globalgap", "leaf", "sedex", "ioa", "seasonal"] },
-    { id: "records", req: "Document & record control kept for required period", guidance: "Records retained, version-controlled and retrievable on request.", schemes: ["red_tractor", "globalgap", "leaf", "sedex", "ioa"] },
-    { id: "internal_audit", req: "Internal audit / self-assessment completed", guidance: "Documented internal review against the standard before the external audit.", schemes: ["red_tractor", "globalgap", "leaf", "sedex"] },
-    { id: "traceability", req: "Traceability & mass-balance records", guidance: "Inputs to outputs traceable; quantities reconcile.", schemes: ["red_tractor", "globalgap", "leaf", "ioa"] },
-    { id: "recall", req: "Product recall / withdrawal procedure tested", guidance: "Documented procedure with a recorded test/mock recall.", schemes: ["red_tractor", "globalgap", "leaf"] },
-  ]},
-  { id: "labour", name: "Worker Welfare & Labour Standards", items: [
-    { id: "rtw", req: "Worker records & right-to-work documentation on file", guidance: "Each worker has a complete record with identity / right-to-work checks.", schemes: ["red_tractor", "globalgap", "sedex", "seasonal", "leaf"], auto: "onboarding" },
-    { id: "contracts", req: "Written terms of employment issued and signed", guidance: "All workers have signed contracts in a language they understand.", schemes: ["red_tractor", "globalgap", "sedex", "seasonal"], auto: "contracts" },
-    { id: "freely", req: "Employment is freely chosen (no forced/bonded labour)", guidance: "No withheld documents, deposits, or debt bondage.", schemes: ["globalgap", "sedex", "seasonal", "red_tractor"] },
-    { id: "wages", req: "Wages meet legal minimum & payslips provided", guidance: "Pay at/above NMW/AWB; itemised payslips; no unlawful deductions.", schemes: ["globalgap", "sedex", "seasonal", "red_tractor"] },
-    { id: "hours", req: "Working hours recorded & within limits; rest breaks", guidance: "Accurate time records; legal hours; rest days and breaks given.", schemes: ["globalgap", "sedex", "seasonal", "red_tractor"] },
-    { id: "child", req: "No child or underage labour", guidance: "Age verification on file; young-worker risk assessments where relevant.", schemes: ["globalgap", "sedex", "seasonal", "red_tractor"] },
-    { id: "discrim", req: "No discrimination; equal treatment", guidance: "Fair recruitment, pay and treatment regardless of protected characteristics.", schemes: ["globalgap", "sedex", "seasonal"] },
-    { id: "foa", req: "Freedom of association respected", guidance: "Workers may join (or not) a union; an elected workers' representative (GRASP) raises concerns.", schemes: ["globalgap", "sedex", "seasonal"] },
-    { id: "grievance", req: "Grievance & whistleblowing procedure", guidance: "Confidential route for workers to raise concerns, with records.", schemes: ["globalgap", "sedex", "seasonal", "red_tractor"] },
-    { id: "labour_providers", req: "Licensed labour providers (GLAA) used & checked", guidance: "GLAA licence verified; agency/gangmaster workers documented.", schemes: ["globalgap", "sedex", "seasonal", "red_tractor"] },
-    { id: "accommodation", req: "Worker accommodation meets standards", guidance: "Where provided, accommodation is licensed, safe and fairly charged.", schemes: ["globalgap", "sedex", "seasonal", "red_tractor"] },
-  ]},
-  { id: "training", name: "Training & Competence", items: [
-    { id: "induction", req: "Worker induction completed & recorded", guidance: "All workers inducted and have reviewed assigned SOPs.", schemes: ["red_tractor", "globalgap", "leaf", "sedex", "seasonal", "ioa"], auto: "sops" },
-    { id: "role_training", req: "Role-specific & refresher training records", guidance: "Training matrix kept up to date with refreshers.", schemes: ["red_tractor", "globalgap", "leaf", "sedex"], auto: "sops" },
-    { id: "operators", req: "Trained/certified operators for machinery & spraying", guidance: "PA certificates, forklift/telehandler tickets, etc. on file.", schemes: ["red_tractor", "globalgap", "leaf", "ioa"] },
-  ]},
-  { id: "hs", name: "Health & Safety", items: [
-    { id: "hs_policy", req: "H&S policy and risk assessments current", guidance: "Written H&S policy and task/area risk assessments reviewed annually.", schemes: ["red_tractor", "globalgap", "leaf", "sedex", "seasonal"] },
-    { id: "hs_training", req: "H&S training completed by all workers", guidance: "Workers trained on safety SOPs relevant to their role.", schemes: ["red_tractor", "globalgap", "sedex", "seasonal"], auto: "sops" },
-    { id: "first_aid", req: "First aid provision & accident records (RIDDOR)", guidance: "Trained first aiders, accident book maintained, RIDDOR awareness.", schemes: ["red_tractor", "globalgap", "sedex", "seasonal"] },
-    { id: "ppe", req: "PPE issued & machinery guarded", guidance: "PPE provided and recorded; guarding and safe operation in place.", schemes: ["red_tractor", "globalgap", "sedex", "seasonal"] },
-    { id: "welfare", req: "Welfare facilities (toilets, water, rest areas)", guidance: "Adequate, clean welfare facilities accessible to all workers.", schemes: ["red_tractor", "globalgap", "sedex", "seasonal"] },
-  ]},
-  { id: "hygiene", name: "Food Safety & Hygiene", items: [
-    { id: "hyg_policy", req: "Hygiene policy, risk assessment & personal hygiene rules", guidance: "Documented hygiene risk assessment, rules, handwashing and illness reporting.", schemes: ["red_tractor", "globalgap", "leaf"] },
-    { id: "harvest_hyg", req: "Harvest & packing hygiene controls", guidance: "Clean equipment, contamination controls, glass/plastic policy.", schemes: ["red_tractor", "globalgap", "leaf"] },
-    { id: "water_test", req: "Water testing for irrigation / washing", guidance: "Risk assessment and microbiological testing of water sources.", schemes: ["red_tractor", "globalgap", "leaf"] },
-    { id: "residue", req: "Produce residue (MRL) testing & analysis", guidance: "Risk-based residue sampling; results within MRLs; lab accreditation on file.", schemes: ["globalgap", "red_tractor", "leaf"] },
-    { id: "pest", req: "Pest control programme", guidance: "Monitoring and control records for stores and packhouses.", schemes: ["red_tractor", "globalgap", "leaf"] },
-  ]},
-  { id: "crop", name: "Crop Protection & Inputs", items: [
-    { id: "ppp_store", req: "Pesticide / PPP secure storage & inventory", guidance: "Locked, bunded store; up-to-date chemical inventory.", schemes: ["red_tractor", "globalgap", "leaf", "ioa"] },
-    { id: "spray_records", req: "Spray application records & LERAPs", guidance: "Records of product, rate, date, operator, buffer zones.", schemes: ["red_tractor", "globalgap", "leaf"] },
-    { id: "sprayer_test", req: "Sprayer calibration & testing (NSTS)", guidance: "Calibration records and valid NSTS test certificate.", schemes: ["red_tractor", "globalgap", "leaf"] },
-    { id: "ipm", req: "Integrated Pest Management (IPM) records", guidance: "Evidence of prevention, monitoring and intervention decisions.", schemes: ["globalgap", "leaf", "red_tractor"] },
-    { id: "nutrient", req: "Fertiliser / nutrient management plan", guidance: "Nutrient plan and application records; NVZ compliance if applicable.", schemes: ["red_tractor", "globalgap", "leaf", "ioa"] },
-    { id: "organic_inputs", req: "Only approved (organic) inputs used", guidance: "All inputs permitted under the organic standard, with proof.", schemes: ["ioa"] },
-  ]},
-  { id: "env", name: "Environment & Sustainability", items: [
-    { id: "waste", req: "Waste management & disposal records", guidance: "Waste segregated; licensed carriers; transfer notes kept.", schemes: ["leaf", "globalgap", "sedex", "ioa", "red_tractor"] },
-    { id: "water_energy", req: "Water & energy use management plan", guidance: "Monitoring and reduction measures for water and energy.", schemes: ["leaf", "globalgap", "sedex"] },
-    { id: "ifm", req: "Integrated Farm Management / biodiversity plan", guidance: "IFM/conservation plan covering soil, landscape and biodiversity.", schemes: ["leaf", "globalgap"] },
-    { id: "pollution", req: "Pollution prevention (fuel, slurry, runoff)", guidance: "Bunded fuel, slurry storage, runoff controls in place.", schemes: ["leaf", "globalgap", "red_tractor", "ioa"] },
-  ]},
-  { id: "organic", name: "Organic Integrity", items: [
-    { id: "org_cert", req: "Valid organic certification & licence", guidance: "Current IOA licence and certificate for all organic land/products.", schemes: ["ioa"] },
-    { id: "no_prohibited", req: "No prohibited substances; buffer zones maintained", guidance: "No banned inputs; buffer zones from conventional land documented.", schemes: ["ioa"] },
-    { id: "separation", req: "Separation & segregation of organic / non-organic", guidance: "Clear separation in storage, handling and records.", schemes: ["ioa"] },
-    { id: "org_trail", req: "Organic audit trail & mass balance", guidance: "Input/output reconciliation proving organic status throughout.", schemes: ["ioa"] },
-  ]},
-  { id: "ethics", name: "Business Ethics", items: [
-    { id: "bribery", req: "Anti-bribery & corruption policy", guidance: "Policy communicated; gifts/hospitality controls in place.", schemes: ["sedex"] },
-    { id: "due_diligence", req: "Ethical trading / supply-chain due diligence", guidance: "Suppliers assessed for labour and ethical risks.", schemes: ["sedex"] },
-  ]},
-];
-
-// Build a fresh audit item-list from the unified framework.
-function buildAuditItems() {
-  const out = [];
-  UNIFIED_FRAMEWORK.forEach(cat => {
-    cat.items.forEach(it => {
-      out.push({
-        id: `${cat.id}_${it.id}`, section: cat.id, sectionName: cat.name,
-        req: it.req, guidance: it.guidance || "", auto: it.auto || null,
-        schemes: it.schemes || [], status: "not_started", notes: "", evidence: [],
-      });
-    });
-  });
-  return out;
-}
-
-// ── OneDrive evidence folders ──
-// Each requirement maps to a dedicated OneDrive folder under this base, so the
-// "Evidence folder" button on a requirement opens exactly the right place to
-// file (or read) its documents. The folder tree is created once in OneDrive
-// (see Create-Audit-Evidence-Folders.bat); names here must match it exactly.
-const AUDIT_EVIDENCE_BASE = "https://mcardlemarketingltd-my.sharepoint.com/personal/admin_mcardlemarketingltd_onmicrosoft_com/Documents/Audit Records/Audit Evidence";
-const AUDIT_FOLDER = {
-  mgmt_registration: "01 Business & Management Systems/01 Scheme registration & certificates",
-  mgmt_policies: "01 Business & Management Systems/02 Policies",
-  mgmt_records: "01 Business & Management Systems/03 Document & record control",
-  mgmt_internal_audit: "01 Business & Management Systems/04 Internal audit",
-  mgmt_traceability: "01 Business & Management Systems/05 Traceability & mass balance",
-  mgmt_recall: "01 Business & Management Systems/06 Product recall",
-  labour_rtw: "02 Worker Welfare & Labour/01 Right to work",
-  labour_contracts: "02 Worker Welfare & Labour/02 Contracts",
-  labour_freely: "02 Worker Welfare & Labour/03 Freely chosen employment",
-  labour_wages: "02 Worker Welfare & Labour/04 Wages & payslips",
-  labour_hours: "02 Worker Welfare & Labour/05 Working hours",
-  labour_child: "02 Worker Welfare & Labour/06 No child labour",
-  labour_discrim: "02 Worker Welfare & Labour/07 No discrimination",
-  labour_foa: "02 Worker Welfare & Labour/08 Freedom of association",
-  labour_grievance: "02 Worker Welfare & Labour/09 Grievance & whistleblowing",
-  labour_labour_providers: "02 Worker Welfare & Labour/10 Labour providers (GLAA)",
-  labour_accommodation: "02 Worker Welfare & Labour/11 Accommodation",
-  training_induction: "03 Training & Competence/01 Induction",
-  training_role_training: "03 Training & Competence/02 Role & refresher training",
-  training_operators: "03 Training & Competence/03 Operator certificates",
-  hs_hs_policy: "04 Health & Safety/01 H&S policy & risk assessments",
-  hs_hs_training: "04 Health & Safety/02 H&S training",
-  hs_first_aid: "04 Health & Safety/03 First aid & accidents",
-  hs_ppe: "04 Health & Safety/04 PPE & machinery",
-  hs_welfare: "04 Health & Safety/05 Welfare facilities",
-  hygiene_hyg_policy: "05 Food Safety & Hygiene/01 Hygiene policy",
-  hygiene_harvest_hyg: "05 Food Safety & Hygiene/02 Harvest & packing hygiene",
-  hygiene_water_test: "05 Food Safety & Hygiene/03 Water testing",
-  hygiene_residue: "05 Food Safety & Hygiene/04 Residue (MRL) testing",
-  hygiene_pest: "05 Food Safety & Hygiene/05 Pest control",
-  crop_ppp_store: "06 Crop Protection & Inputs/01 Pesticide storage & inventory",
-  crop_spray_records: "06 Crop Protection & Inputs/02 Spray records",
-  crop_sprayer_test: "06 Crop Protection & Inputs/03 Sprayer calibration (NSTS)",
-  crop_ipm: "06 Crop Protection & Inputs/04 IPM",
-  crop_nutrient: "06 Crop Protection & Inputs/05 Nutrient management",
-  crop_organic_inputs: "06 Crop Protection & Inputs/06 Approved organic inputs",
-  env_waste: "07 Environment & Sustainability/01 Waste management",
-  env_water_energy: "07 Environment & Sustainability/02 Water & energy",
-  env_ifm: "07 Environment & Sustainability/03 IFM & biodiversity",
-  env_pollution: "07 Environment & Sustainability/04 Pollution prevention",
-  organic_org_cert: "08 Organic Integrity/01 Organic certification",
-  organic_no_prohibited: "08 Organic Integrity/02 No prohibited substances",
-  organic_separation: "08 Organic Integrity/03 Separation & segregation",
-  organic_org_trail: "08 Organic Integrity/04 Organic audit trail",
-  ethics_bribery: "09 Business Ethics/01 Anti-bribery",
-  ethics_due_diligence: "09 Business Ethics/02 Supply-chain due diligence",
-};
-const auditFolderUrl = (itemId) => AUDIT_FOLDER[itemId] ? encodeURI(`${AUDIT_EVIDENCE_BASE}/${AUDIT_FOLDER[itemId]}`) : null;
-
-// Live evaluation of an `auto` item against current worker/document data.
-// Returns { status, detail, metric } or null when there is nothing to verify.
-function autoEvaluateAudit(auto, emps, docs, obSubs) {
-  const active = (emps || []).filter(e => !e.archived);
-  if (!active.length) return { status: "attention", detail: "No active workers on record.", metric: "0/0" };
-  if (auto === "contracts") {
-    const contracts = (docs || []).filter(d => d.type === "contract");
-    if (!contracts.length) return { status: "in_progress", detail: "No contracts have been set up yet.", metric: "0/0" };
-    const fully = active.filter(e => contracts
-      .filter(c => c.assignedTo?.includes("all") || c.assignedTo?.includes(e.id))
-      .every(c => { const chk = e.docChecks[c.id]; return chk && (chk.status === "signed" || chk.sig || chk.status === undefined); }));
-    const ok = fully.length === active.length;
-    return { status: ok ? "ready" : "attention", metric: `${fully.length}/${active.length}`,
-      detail: `${fully.length} of ${active.length} active workers have signed all assigned contracts.` };
-  }
-  if (auto === "sops") {
-    const sops = (docs || []).filter(d => d.type === "sop");
-    if (!sops.length) return { status: "in_progress", detail: "No SOPs / training documents set up yet.", metric: "0/0" };
-    const fully = active.filter(e => sops
-      .filter(s => s.assignedTo?.includes("all") || s.assignedTo?.includes(e.id))
-      .every(s => !!e.docChecks[s.id]));
-    const ok = fully.length === active.length;
-    return { status: ok ? "ready" : "attention", metric: `${fully.length}/${active.length}`,
-      detail: `${fully.length} of ${active.length} active workers have reviewed all assigned SOPs / training.` };
-  }
-  if (auto === "onboarding") {
-    const withRecord = active.filter(e => (obSubs || []).some(s => s.employee_id === e.id));
-    const flagged = (obSubs || []).filter(s => s.status === "flagged").length;
-    if (!withRecord.length) return { status: "in_progress", detail: "No onboarding records captured yet.", metric: `0/${active.length}` };
-    const ok = withRecord.length === active.length && flagged === 0;
-    return { status: ok ? "ready" : "attention", metric: `${withRecord.length}/${active.length}`,
-      detail: `${withRecord.length} of ${active.length} workers have onboarding records${flagged ? ` · ${flagged} flagged for review` : ""}.` };
-  }
-  return null;
-}
-
-// Effective status of an item: auto items reflect live data unless marked N/A.
-function auditItemStatus(item, ctx) {
-  if (item.status === "na") return "na";
-  if (item.auto) {
-    const ev = autoEvaluateAudit(item.auto, ctx.emps, ctx.docs, ctx.obSubs);
-    if (ev) return ev.status;
-  }
-  return item.status || "not_started";
-}
-
-function auditProgress(audit, ctx) {
-  const items = audit.items || [];
-  const counted = items.filter(i => auditItemStatus(i, ctx) !== "na");
-  if (!counted.length) return 0;
-  const ready = counted.filter(i => auditItemStatus(i, ctx) === "ready").length;
-  return Math.round((ready / counted.length) * 100);
-}
-
-// Readiness for a single scheme = ready % across only that scheme's items.
-function auditSchemeProgress(audit, schemeKey, ctx) {
-  const items = (audit.items || []).filter(i => (i.schemes || []).includes(schemeKey));
-  const counted = items.filter(i => auditItemStatus(i, ctx) !== "na");
-  if (!counted.length) return null;
-  const ready = counted.filter(i => auditItemStatus(i, ctx) === "ready").length;
-  return { pct: Math.round((ready / counted.length) * 100), ready, total: counted.length };
-}
-
-// Export an audit as a multi-sheet "audit pack" workbook for the auditor.
-// `scope` is "all" or a scheme key, in which case only that scheme's items export.
-function exportAuditPack(audit, ctx, emps, docs, scope = "all") {
-  const wb = XLSX.utils.book_new();
-  const scopeName = scope === "all" ? "All schemes" : (AUDIT_SCHEME_TAGS[scope]?.name || scope);
-  const items = (audit.items || []).filter(i => scope === "all" || (i.schemes || []).includes(scope));
-  const counts = AUDIT_STAT_ORDER.reduce((m, k) => { m[k] = 0; return m; }, {});
-  items.forEach(i => { counts[auditItemStatus(i, ctx)] = (counts[auditItemStatus(i, ctx)] || 0) + 1; });
-  const readyCount = items.filter(i => auditItemStatus(i, ctx) === "ready").length;
-  const countedCount = items.filter(i => auditItemStatus(i, ctx) !== "na").length;
-  const summary = [
-    { Field: "Audit Title", Value: audit.title },
-    { Field: "Scope", Value: scopeName },
-    { Field: "Audit Date", Value: audit.auditDate || "Not scheduled" },
-    { Field: "Readiness", Value: `${countedCount ? Math.round((readyCount / countedCount) * 100) : 0}%` },
-    { Field: "Items Ready", Value: counts.ready || 0 },
-    { Field: "Items In Progress", Value: counts.in_progress || 0 },
-    { Field: "Items Not Started", Value: counts.not_started || 0 },
-    { Field: "Items Needing Attention", Value: counts.attention || 0 },
-    { Field: "Items N/A", Value: counts.na || 0 },
-    { Field: "Pack Generated", Value: nowDateTime() },
-  ];
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summary), "Summary");
-
-  // Per-scheme coverage overview (only meaningful for a full export).
-  if (scope === "all") {
-    const cov = Object.entries(AUDIT_SCHEME_TAGS).map(([k, s]) => {
-      const p = auditSchemeProgress(audit, k, ctx);
-      return { Scheme: s.name, "Requirements": p ? p.total : 0, "Ready": p ? p.ready : 0, "Readiness": p ? `${p.pct}%` : "—" };
-    });
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(cov), "Scheme Coverage");
-  }
-
-  const checklist = items.map(i => {
-    const ev = i.auto ? autoEvaluateAudit(i.auto, ctx.emps, ctx.docs, ctx.obSubs) : null;
-    const evList = (i.evidence || []).map(e => e.type === "link" ? `${e.label || "Link"}: ${e.url}` : e.text).filter(Boolean);
-    if (ev) evList.unshift(`Auto-verified (${ev.metric}): ${ev.detail}`);
-    return {
-      Category: i.sectionName, Requirement: i.req,
-      "Applies To": (i.schemes || []).map(k => AUDIT_SCHEME_TAGS[k]?.name || k).join(", "),
-      Status: (AUDIT_STAT[auditItemStatus(i, ctx)] || {}).label || "",
-      "Auto-linked": i.auto ? "Yes" : "",
-      Evidence: evList.join("  |  ") || "—",
-      Notes: i.notes || "",
-    };
-  });
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(checklist.length ? checklist : [{ Note: "No items" }]), "Checklist");
-
-  const active = emps.filter(e => !e.archived);
-  const workerRows = active.map(e => {
-    const contracts = docs.filter(d => (d.type === "contract") && (d.assignedTo?.includes("all") || d.assignedTo?.includes(e.id)));
-    const sops = docs.filter(d => (d.type === "sop") && (d.assignedTo?.includes("all") || d.assignedTo?.includes(e.id)));
-    const ob = (ctx.obSubs || []).some(s => s.employee_id === e.id);
-    return {
-      Worker: e.name, Role: e.role, Start: e.startDate || "",
-      "Contracts Signed": `${contracts.filter(c => e.docChecks[c.id]).length}/${contracts.length}`,
-      "SOPs / Training Reviewed": `${sops.filter(s => e.docChecks[s.id]).length}/${sops.length}`,
-      "Onboarding Record": ob ? "Yes" : "No",
-    };
-  });
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(workerRows.length ? workerRows : [{ Note: "No active workers" }]), "Worker Evidence");
-
-  const safe = `${audit.title || "Audit"}_${scope === "all" ? "All" : (AUDIT_SCHEME_TAGS[scope]?.short || scope)}`.replace(/[^a-z0-9]+/gi, "_");
-  XLSX.writeFile(wb, `AuditPack_${safe}_${todayDate()}.xlsx`);
-}
-
 // Document progress export - shows what's done and outstanding
 function exportDocProgress(emps, docs) {
   const wb = XLSX.utils.book_new();
@@ -766,99 +449,6 @@ function PickChart({ history, width=340, height=160, t }) {
 
 function Badge({children,color,bg}){return<span style={{display:"inline-block",padding:"3px 10px",borderRadius:99,fontSize:11,fontWeight:600,color,background:bg}}>{children}</span>;}
 function Ring({percent,size=48,stroke=4,color}){const r=(size-stroke)/2,ci=2*Math.PI*r,off=ci-(percent/100)*ci;return(<svg width={size} height={size} style={{transform:"rotate(-90deg)"}}><circle cx={size/2} cy={size/2} r={r} fill="none" stroke={C.border} strokeWidth={stroke}/><circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth={stroke} strokeDasharray={ci} strokeDashoffset={off} strokeLinecap="round" style={{transition:"stroke-dashoffset 0.5s"}}/></svg>);}
-
-// ── AI Assistant (manager only) ──
-// Builds a plain-text snapshot of live app data for the assistant. PINs, usernames
-// and private notes are deliberately excluded.
-function buildAssistantContext(emps, docs, obDocs, obSubs) {
-  const active = emps.filter(e => !e.archived);
-  const lines = [`Date: ${todayDate()}`, `Team: ${active.length} active employees (${emps.length - active.length} archived)`, "", "EMPLOYEES:"];
-  active.forEach(emp => {
-    const ad = getAssignedDocs(docs, emp.id);
-    const dp = docPct(emp.docChecks, ad);
-    const last = emp.pickHistory[emp.pickHistory.length - 1];
-    const pick = emp.trackPickRate === false ? "pick rate not tracked" : last ? `pick rate ${last.rate}/${getTarget(last.wk)} kg/hr target (week ${last.wk})` : "no pick rate data yet";
-    const issues = [];
-    ad.forEach(d => {
-      const chk = emp.docChecks[d.id];
-      if (!chk) issues.push(`"${d.name}" not completed`);
-      else if (d.type === "contract" && chk.status && chk.status !== "signed") issues.push(`"${d.name}" opened but not signed`);
-      else if (d.type === "sop") {
-        const rs = getReviewStatus(chk, d.reviewMonths || 12);
-        if (rs === "overdue") issues.push(`"${d.name}" review overdue`);
-        else if (rs === "due_soon") issues.push(`"${d.name}" review due within 30 days`);
-      }
-    });
-    lines.push(`- ${emp.name} (${emp.role}, started ${emp.startDate || "unknown"}): ${pick}; documents ${dp}% complete${issues.length ? "; outstanding: " + issues.join(", ") : ""}`);
-  });
-  lines.push("", "DOCUMENTS:");
-  docs.forEach(d => {
-    const aEmps = emps.filter(e => !e.archived && (d.assignedTo?.includes("all") || d.assignedTo?.includes(e.id)));
-    const done = aEmps.filter(e => e.docChecks[d.id]).length;
-    lines.push(`- ${d.name} (${d.type.toUpperCase()}): ${done}/${aEmps.length} ${d.type === "contract" ? "signed" : "reviewed"}`);
-  });
-  const pending = obSubs.filter(s => !s.status || s.status === "pending").length;
-  const flagged = obSubs.filter(s => (s.flag_reasons || []).length > 0).length;
-  lines.push("", `ONBOARDING: ${obDocs.length} active documents; ${obSubs.length} submissions, ${pending} awaiting review, ${flagged} with flagged health/safety answers`);
-  return lines.join("\n");
-}
-
-function AssistantView({ emps, docs, obDocs, obSubs }) {
-  const [msgs, setMsgs] = useState([]);
-  const [input, setInput] = useState("");
-  const [busy, setBusy] = useState(false);
-  const endRef = useRef(null);
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs, busy]);
-
-  const send = async () => {
-    const text = input.trim();
-    if (!text || busy) return;
-    const next = [...msgs, { role: "user", content: text }];
-    setMsgs(next); setInput(""); setBusy(true);
-    try {
-      const res = await fetch("/api/assistant", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: next, context: buildAssistantContext(emps, docs, obDocs, obSubs) })
-      });
-      const data = await res.json();
-      setMsgs(m => [...m, { role: "assistant", content: data.reply || `Error: ${data.error || "no reply"}${data.details ? ` — ${data.details}` : ""}` }]);
-    } catch (e) {
-      setMsgs(m => [...m, { role: "assistant", content: "Error: couldn't reach the assistant. " + e.message }]);
-    }
-    setBusy(false);
-  };
-
-  const suggestions = ["Who needs attention this week?", "What's outstanding before our next audit?", "Summarise team compliance", "Help me plan onboarding for new pickers"];
-  return (
-    <div>
-      <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>Assistant</h2>
-      <p style={{ color: C.textMuted, marginBottom: 20, fontSize: 13 }}>AI assistant with live access to your team, document and onboarding data</p>
-      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, display: "flex", flexDirection: "column", height: "62vh", minHeight: 380 }}>
-        <div style={{ flex: 1, overflowY: "auto", padding: 20, display: "flex", flexDirection: "column", gap: 12 }}>
-          {msgs.length === 0 && (
-            <div style={{ margin: "auto", textAlign: "center", maxWidth: 420 }}>
-              <div style={{ fontSize: 30, marginBottom: 10 }}>✨</div>
-              <div style={{ color: C.textMuted, fontSize: 13, marginBottom: 16 }}>Ask about team performance, compliance gaps, audit prep or planning. Try:</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {suggestions.map(s => <button key={s} onClick={() => setInput(s)} style={{ padding: "9px 14px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surfaceAlt, color: C.text, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>{s}</button>)}
-              </div>
-            </div>
-          )}
-          {msgs.map((m, i) => (
-            <div key={i} style={{ alignSelf: m.role === "user" ? "flex-end" : "flex-start", maxWidth: "85%", padding: "10px 14px", borderRadius: 12, fontSize: 13.5, lineHeight: 1.6, whiteSpace: "pre-wrap", background: m.role === "user" ? C.accent : C.surfaceAlt, color: m.role === "user" ? "#fff" : C.text, border: m.role === "user" ? "none" : `1px solid ${C.border}` }}>{m.content}</div>
-          ))}
-          {busy && <div style={{ alignSelf: "flex-start", padding: "10px 14px", borderRadius: 12, background: C.surfaceAlt, border: `1px solid ${C.border}`, color: C.textMuted, fontSize: 13 }}>Thinking…</div>}
-          <div ref={endRef} />
-        </div>
-        <div style={{ borderTop: `1px solid ${C.border}`, padding: 12, display: "flex", gap: 8 }}>
-          <textarea value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} placeholder="Ask your assistant… (Enter to send)" rows={1} style={{ flex: 1, padding: "10px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surfaceAlt, color: C.text, fontSize: 13.5, outline: "none", resize: "none", fontFamily: "inherit", lineHeight: 1.5 }} />
-          <button onClick={send} disabled={busy || !input.trim()} style={{ padding: "0 20px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer", opacity: busy || !input.trim() ? 0.4 : 1 }}>Send</button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ── Onboarding: Employee Document View ──
 function OnboardingDocView({ doc, existing, empName, onSubmit, onCancel, t, defaultLang }) {
@@ -1099,7 +689,6 @@ export default function App() {
   const { managerPin, loaded: sL } = useSettings();
   const { obDocs, loaded: obDL, refresh: refreshObDocs } = useOnboardingDocs();
   const { subs: obSubs, loaded: obSL, saveSub: saveObSub, refresh: refreshObSubs } = useOnboardingSubs();
-  const { audits, loaded: auL, saveAudit, deleteAudit, refresh: refreshAudits } = useAudits();
   const [lang, setLang] = useLang();
 
   const [auth, setAuth] = useState(null);
@@ -1113,21 +702,17 @@ export default function App() {
   const [obOpenDocId, setObOpenDocId] = useState(null); const [obReviewId, setObReviewId] = useState(null);
   const [showArchived, setShowArchived] = useState(false);
   const [roleFilter, setRoleFilter] = useState("all");
-  const [selAuditId, setSelAuditId] = useState(null); const [showAddAudit, setShowAddAudit] = useState(false);
-  const [naTitle, setNaTitle] = useState(""); const [naDate, setNaDate] = useState("");
-  const [auditFilterSec, setAuditFilterSec] = useState("all"); const [auditFilterScheme, setAuditFilterScheme] = useState("all");
-  const [exportScope, setExportScope] = useState("all");
-  const [evDraft, setEvDraft] = useState({ itemId: null, label: "", url: "" });
-
+  const [empTypeFilter, setEmpTypeFilter] = useState("all");
+  const [nET, sNET] = useState("permanent"); const [nED, sNED] = useState("");
 
   // Auto-refresh data every 30 seconds so changes show up across devices
   useEffect(() => {
-    const interval = setInterval(() => { refreshEmps(); refreshDocs(); refreshObSubs(); refreshAudits(); }, 30000);
+    const interval = setInterval(() => { refreshEmps(); refreshDocs(); refreshObSubs(); }, 30000);
     return () => clearInterval(interval);
-  }, [refreshEmps, refreshDocs, refreshObSubs, refreshAudits]);
+  }, [refreshEmps, refreshDocs, refreshObSubs]);
 
   const t = T[lang] || T.en;
-  const loaded = eL && dL && sL && obDL && obSL && auL;
+  const loaded = eL && dL && sL && obDL && obSL;
   const isEmp = auth?.role === "employee";
   const empSelf = isEmp ? emps.find(e => e.id === auth.id) : null;
   const sel = emps.find(e => e.id === selId);
@@ -1159,8 +744,8 @@ export default function App() {
 
   const addE = async () => {
     if (!nN.trim() || !nP.trim()) return;
-    const emp = { id: "e" + Date.now(), name: nN.trim(), role: nR.trim() || "Team Member", pin: nP.trim(), username: nUN.trim().toLowerCase(), accountType: nRole, startDate: nSD, pickHistory: [], docChecks: {}, notes: "", privateNotes: "", trackPickRate: nTP };
-    await saveEmp(emp); sNN(""); sNR(""); sNP(""); sNSD(todayDate()); sNTP(true); sNUN(""); sNRole("employee"); setShowAE(false);
+    const emp = { id: "e" + Date.now(), name: nN.trim(), role: nR.trim() || "Team Member", pin: nP.trim(), username: nUN.trim().toLowerCase(), accountType: nRole, employmentType: nET, startDate: nSD, endDate: nET === "seasonal" ? nED : "", pickHistory: [], docChecks: {}, notes: "", privateNotes: "", trackPickRate: nTP };
+    await saveEmp(emp); sNN(""); sNR(""); sNP(""); sNSD(todayDate()); sNTP(true); sNUN(""); sNRole("employee"); sNET("permanent"); sNED(""); setShowAE(false);
   };
   const remE = async (id) => { await deleteEmp(id); if (selId === id) { setSelId(null); setView("employees"); } };
   const addD = async () => {
@@ -1243,44 +828,6 @@ export default function App() {
     await saveObSub({ ...sub, status: "rejected", manager_notes: notes, reviewed_at: new Date().toISOString(), reviewed_by: "manager" });
     setObReviewId(null);
   };
-
-  // ── Audit handlers ──
-  const auditCtx = { emps, docs, obSubs };
-  const addAudit = async () => {
-    const audit = {
-      id: "a" + Date.now(), scheme: "unified",
-      title: naTitle.trim() || `Compliance Audit ${new Date().getFullYear()}`,
-      auditDate: naDate || "", status: "planning", items: buildAuditItems(),
-    };
-    await saveAudit(audit);
-    setNaTitle(""); setNaDate(""); setShowAddAudit(false);
-    setSelAuditId(audit.id); setView("auditDetail");
-  };
-  const updateAuditItem = async (auditId, itemId, updates) => {
-    const audit = audits.find(a => a.id === auditId); if (!audit) return;
-    await saveAudit({ ...audit, items: audit.items.map(i => i.id === itemId ? { ...i, ...updates } : i) });
-  };
-  const cycleAuditStatus = (auditId, item) => {
-    const idx = AUDIT_STAT_ORDER.indexOf(item.status || "not_started");
-    const next = AUDIT_STAT_ORDER[(idx + 1) % AUDIT_STAT_ORDER.length];
-    updateAuditItem(auditId, item.id, { status: next });
-  };
-  const addAuditEvidence = async (auditId, itemId) => {
-    if (!evDraft.url.trim() && !evDraft.label.trim()) return;
-    const audit = audits.find(a => a.id === auditId); if (!audit) return;
-    const item = audit.items.find(i => i.id === itemId); if (!item) return;
-    const entry = evDraft.url.trim()
-      ? { type: "link", label: evDraft.label.trim() || "Evidence", url: evDraft.url.trim() }
-      : { type: "note", text: evDraft.label.trim() };
-    await updateAuditItem(auditId, itemId, { evidence: [...(item.evidence || []), entry] });
-    setEvDraft({ itemId, label: "", url: "" });
-  };
-  const removeAuditEvidence = async (auditId, itemId, idx) => {
-    const audit = audits.find(a => a.id === auditId); if (!audit) return;
-    const item = audit.items.find(i => i.id === itemId); if (!item) return;
-    await updateAuditItem(auditId, itemId, { evidence: (item.evidence || []).filter((_, i) => i !== idx) });
-  };
-  const removeAudit = async (id) => { await deleteAudit(id); if (selAuditId === id) { setSelAuditId(null); setView("audits"); } };
 
   const getEmpObProgress = (empId) => {
     if (!obDocs.length) return { total: 0, done: 0, pct: 0, hasFlagged: false };
@@ -1491,8 +1038,6 @@ export default function App() {
           <button style={nb(view === "employees" || view === "detail")} onClick={() => setView("employees")}>{t.employees}</button>
           {isManager && <button style={nb(view === "documents")} onClick={() => setView("documents")}>{t.documents}</button>}
           <button style={nb(view === "onboarding")} onClick={() => setView("onboarding")}>Onboarding</button>
-          {isManager && <button style={nb(view === "audits" || view === "auditDetail")} onClick={() => setView("audits")}>Audits</button>}
-          {isManager && <button style={nb(view === "assistant")} onClick={() => setView("assistant")}>✨ Assistant</button>}
           {isManager && <button onClick={() => exportXLS(emps, docs, t)} style={{ padding: "9px 16px", borderRadius: 8, border: "none", background: "rgba(34,197,94,0.15)", color: C.green, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>📊 {t.exportExcel}</button>}
           <div style={{ width: 1, height: 24, background: C.border, margin: "0 4px" }} /><LangSel lang={lang} setLang={setLang} />
           <button onClick={() => setAuth(null)} style={{ ...nb(false), color: C.red, fontSize: 12 }}>{t.signOut}</button>
@@ -1527,22 +1072,25 @@ export default function App() {
             <div><h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>{t.employees}</h2><p style={{ color: C.textMuted, fontSize: 13 }}>{activeEmps.length} {t.teamMembers}{emps.length !== activeEmps.length ? ` · ${emps.length - activeEmps.length} archived` : ""}</p></div>
             <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
               <select value={roleFilter} onChange={e => setRoleFilter(e.target.value)} style={{ padding: "8px 12px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.surfaceAlt, color: C.text, fontSize: 12, outline: "none", cursor: "pointer", fontFamily: "inherit" }}><option value="all">All Roles</option>{roles.map(r => <option key={r} value={r}>{r}</option>)}</select>
+              <select value={empTypeFilter} onChange={e => setEmpTypeFilter(e.target.value)} style={{ padding: "8px 12px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.surfaceAlt, color: C.text, fontSize: 12, outline: "none", cursor: "pointer", fontFamily: "inherit" }}><option value="all">All Types</option><option value="permanent">Permanent</option><option value="seasonal">Seasonal</option><option value="casual">Casual</option></select>
               <input placeholder={t.search} value={search} onChange={e => setSearch(e.target.value)} style={{ ...inp, width: 170 }} />
               {isManager && <button onClick={() => setShowArchived(!showArchived)} style={{ padding: "7px 12px", borderRadius: 7, border: `1px solid ${C.border}`, background: showArchived ? C.amberSoft : "transparent", color: showArchived ? C.amber : C.textDim, fontWeight: 600, fontSize: 11, cursor: "pointer" }}>{showArchived ? "Hide Archived" : "Show Archived"}</button>}
               {isManager && <button onClick={() => setShowAE(true)} style={{ padding: "9px 18px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{t.add}</button>}
             </div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(275px, 1fr))", gap: 14 }}>
-            {displayEmps.filter(e => (roleFilter === "all" || e.role === roleFilter) && (e.name.toLowerCase().includes(search.toLowerCase()) || e.role.toLowerCase().includes(search.toLowerCase()))).map(emp => { const ad = getAssignedDocs(docs, emp.id); const dp = docPct(emp.docChecks, ad); const last = emp.pickHistory[emp.pickHistory.length - 1]; const lp = last ? last.rate : 0; const tgt = getTarget(last ? last.wk : 0); const met = lp >= tgt;
+            {displayEmps.filter(e => (roleFilter === "all" || e.role === roleFilter) && (empTypeFilter === "all" || e.employmentType === empTypeFilter) && (e.name.toLowerCase().includes(search.toLowerCase()) || e.role.toLowerCase().includes(search.toLowerCase()))).map(emp => { const ad = getAssignedDocs(docs, emp.id); const dp = docPct(emp.docChecks, ad); const last = emp.pickHistory[emp.pickHistory.length - 1]; const lp = last ? last.rate : 0; const tgt = getTarget(last ? last.wk : 0); const met = lp >= tgt;
               return (<div key={emp.id} onClick={() => { setSelId(emp.id); setView("detail"); }} style={{ ...card, cursor: "pointer", transition: "border-color 0.2s", opacity: emp.archived ? 0.5 : 1 }} onMouseEnter={e => e.currentTarget.style.borderColor = C.accent} onMouseLeave={e => e.currentTarget.style.borderColor = C.border}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}><div><div style={{ fontWeight: 700, fontSize: 15, marginBottom: 2 }}>{emp.name}{emp.archived ? " (Archived)" : ""}</div><div style={{ color: C.textMuted, fontSize: 12 }}>{emp.role}</div></div><Ring percent={dp} size={42} stroke={4} color={dp === 100 ? C.green : dp >= 50 ? C.amber : C.red} /></div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}><div><div style={{ fontWeight: 700, fontSize: 15, marginBottom: 2 }}>{emp.name}{emp.archived ? " (Archived)" : ""}</div><div style={{ color: C.textMuted, fontSize: 12 }}>{emp.role}{emp.employmentType !== "permanent" ? <span style={{ marginLeft: 6, padding: "1px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: emp.employmentType === "seasonal" ? C.amberSoft : C.accentSoft, color: emp.employmentType === "seasonal" ? C.amber : C.accent }}>{emp.employmentType}</span> : ""}</div></div><Ring percent={dp} size={42} stroke={4} color={dp === 100 ? C.green : dp >= 50 ? C.amber : C.red} /></div>
                 <div style={{ marginTop: 14, display: "flex", justifyContent: "space-between" }}><div><span style={{ fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", color: met ? C.green : C.red }}>{typeof lp === "number" ? lp.toFixed(1) : lp}</span><span style={{ fontSize: 11, color: C.textDim }}>/{typeof tgt === "number" ? tgt.toFixed(1) : tgt}</span></div><span style={{ fontSize: 11, color: C.textMuted, fontFamily: "'JetBrains Mono', monospace" }}>{dp}%</span></div>
               </div>); })}
           </div>
           {showAE && <Modal onClose={() => setShowAE(false)}><h3 style={{ fontSize: 17, fontWeight: 700, marginBottom: 18 }}>{t.addEmployee}</h3>
             {[{ l: t.fullName, v: nN, s: sNN, p: "e.g. Jane Smith" },{ l: "Username", v: nUN, s: sNUN, p: "e.g. jsmith" },{ l: t.role, v: nR, s: sNR, p: "e.g. Warehouse Operative" },{ l: t.pinForSignIn, v: nP, s: v => sNP(v.replace(/\D/g, "")), p: "e.g. 7777" }].map(f => (<div key={f.l} style={{ marginBottom: 12 }}><label style={lbl}>{f.l}</label><input value={f.v} onChange={e => f.s(e.target.value)} placeholder={f.p} style={inp} /></div>))}
             <div style={{ marginBottom: 12 }}><label style={lbl}>Account Type</label><div style={{ display: "flex", gap: 8 }}>{["employee", "supervisor", "manager"].map(r => (<button key={r} onClick={() => sNRole(r)} style={{ flex: 1, padding: "9px", borderRadius: 8, border: `1px solid ${nRole === r ? C.accent : C.border}`, background: nRole === r ? C.accentSoft : "transparent", color: nRole === r ? C.accent : C.textMuted, fontWeight: 600, fontSize: 12, cursor: "pointer", textTransform: "capitalize" }}>{r}</button>))}</div></div>
+            <div style={{ marginBottom: 12 }}><label style={lbl}>Employment Type</label><div style={{ display: "flex", gap: 8 }}>{["permanent", "seasonal", "casual"].map(et => (<button key={et} onClick={() => sNET(et)} style={{ flex: 1, padding: "9px", borderRadius: 8, border: `1px solid ${nET === et ? C.accent : C.border}`, background: nET === et ? C.accentSoft : "transparent", color: nET === et ? C.accent : C.textMuted, fontWeight: 600, fontSize: 12, cursor: "pointer", textTransform: "capitalize" }}>{et}</button>))}</div></div>
             <div style={{ marginBottom: 12 }}><label style={lbl}>{t.startDate}</label><input type="date" value={nSD} onChange={e => sNSD(e.target.value)} style={inp} /></div>
+            {nET === "seasonal" && <div style={{ marginBottom: 12 }}><label style={lbl}>Contract End Date</label><input type="date" value={nED} onChange={e => sNED(e.target.value)} style={inp} /></div>}
             <div style={{ marginBottom: 16 }}><label onClick={() => sNTP(!nTP)} style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", padding: "10px 12px", borderRadius: 8, background: nTP ? C.accentSoft : C.surfaceAlt, border: `1px solid ${nTP ? C.accent : C.border}` }}><div style={{ width: 20, height: 20, borderRadius: 5, border: `2px solid ${nTP ? C.accent : C.textDim}`, background: nTP ? C.accent : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{nTP && <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6L5 8.5L9.5 3.5" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>}</div><span style={{ fontWeight: 600, fontSize: 13, color: nTP ? C.accent : C.textMuted }}>{t.trackPickRate || "Track Pick Rate"}</span></label></div>
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}><button onClick={() => setShowAE(false)} style={{ padding: "9px 18px", borderRadius: 8, border: `1px solid ${C.border}`, background: "transparent", color: C.textMuted, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{t.cancel}</button><button onClick={addE} style={{ padding: "9px 22px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer", opacity: nN.trim() && nP.trim() ? 1 : 0.4 }}>{t.add}</button></div>
           </Modal>}
@@ -1650,142 +1198,12 @@ export default function App() {
           )}
         </div>)}
 
-        {/* ═══ AUDITS (Manager) ═══ */}
-        {view === "audits" && (<div>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, flexWrap: "wrap", gap: 12 }}>
-            <div><h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>Audits</h2><p style={{ color: C.textMuted, fontSize: 13 }}>One framework covering Red Tractor, LEAF, SMETA, Irish Organic & seasonal-worker audits</p></div>
-            <button onClick={() => setShowAddAudit(true)} style={{ padding: "9px 18px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>+ New Audit</button>
-          </div>
-          <div style={{ padding: "10px 14px", borderRadius: 10, background: C.accentSoft, border: `1px solid ${C.border}`, color: C.textMuted, fontSize: 12.5, lineHeight: 1.6, marginBottom: 22 }}>
-            <strong style={{ color: C.text }}>Prepare once, comply many.</strong> A single checklist where every requirement is tagged with the schemes it satisfies. Fill in the evidence once — filter or export per scheme when each auditor arrives. Items marked <span style={{ color: C.accent, fontWeight: 600 }}>Auto</span> verify themselves live from your worker records, signed contracts, SOP reviews and onboarding data.
-          </div>
-          {audits.length === 0 ? (
-            <div style={{ ...card, textAlign: "center", padding: 48, color: C.textMuted }}>No audits yet. Create one to start tracking readiness.</div>
-          ) : (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 14 }}>
-              {audits.map(a => { const pct = auditProgress(a, auditCtx); const attn = (a.items || []).filter(i => auditItemStatus(i, auditCtx) === "attention").length;
-                return (<div key={a.id} onClick={() => { setSelAuditId(a.id); setView("auditDetail"); }} style={{ ...card, cursor: "pointer", transition: "border-color 0.2s" }} onMouseEnter={e => e.currentTarget.style.borderColor = C.accent} onMouseLeave={e => e.currentTarget.style.borderColor = C.border}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                    <div style={{ flex: 1 }}><Badge color={C.accent} bg={C.accentSoft}>Combined</Badge><div style={{ fontWeight: 700, fontSize: 15, margin: "10px 0 2px" }}>{a.title}</div><div style={{ color: C.textMuted, fontSize: 12 }}>{a.auditDate ? `📅 ${a.auditDate}` : "Date not set"}</div></div>
-                    <Ring percent={pct} size={48} stroke={4} color={pct === 100 ? C.green : pct >= 50 ? C.amber : C.red} />
-                  </div>
-                  <div style={{ marginTop: 12, display: "flex", flexWrap: "wrap", gap: 5 }}>{Object.entries(AUDIT_SCHEME_TAGS).map(([k, s]) => { const p = auditSchemeProgress(a, k, auditCtx); return (<span key={k} title={`${s.name}: ${p ? p.pct + "% ready" : "n/a"}`} style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 99, color: s.color, background: `${s.color}1a` }}>{s.short} {p ? `${p.pct}%` : "—"}</span>); })}</div>
-                  <div style={{ marginTop: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span style={{ fontSize: 12, color: C.textMuted }}>{(a.items || []).length} requirements</span>
-                    {attn > 0 ? <Badge color={C.red} bg={C.redSoft}>{attn} need attention</Badge> : <Badge color={C.green} bg={C.greenSoft}>{pct}% ready</Badge>}
-                  </div>
-                </div>); })}
-            </div>
-          )}
-          {showAddAudit && <Modal onClose={() => setShowAddAudit(false)}>
-            <h3 style={{ fontSize: 17, fontWeight: 700, marginBottom: 6 }}>New Audit</h3>
-            <p style={{ color: C.textMuted, fontSize: 12.5, lineHeight: 1.6, marginBottom: 18 }}>Creates one combined checklist covering all schemes (Red Tractor, LEAF, SMETA, Irish Organic & seasonal-worker). You can filter and export per scheme afterwards.</p>
-            <div style={{ marginBottom: 12 }}><label style={lbl}>Audit Title</label><input value={naTitle} onChange={e => setNaTitle(e.target.value)} placeholder={`e.g. Compliance Audit ${new Date().getFullYear()}`} style={inp} /></div>
-            <div style={{ marginBottom: 16 }}><label style={lbl}>Audit Date (optional)</label><input type="date" value={naDate} onChange={e => setNaDate(e.target.value)} style={inp} /></div>
-            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}><button onClick={() => setShowAddAudit(false)} style={{ padding: "9px 18px", borderRadius: 8, border: `1px solid ${C.border}`, background: "transparent", color: C.textMuted, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{t.cancel}</button><button onClick={addAudit} style={{ padding: "9px 22px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>Create</button></div>
-          </Modal>}
-        </div>)}
-
-        {/* ═══ AUDIT DETAIL (Manager) ═══ */}
-        {view === "auditDetail" && (() => {
-          const audit = audits.find(a => a.id === selAuditId);
-          if (!audit) return <div style={{ ...card, textAlign: "center", color: C.textMuted }}>Audit not found.<div style={{ marginTop: 12 }}><button onClick={() => setView("audits")} style={nb(false)}>← Back to Audits</button></div></div>;
-          const pct = auditProgress(audit, auditCtx);
-          const sections = UNIFIED_FRAMEWORK;
-          const shownItems = (audit.items || []).filter(i =>
-            (auditFilterSec === "all" || i.section === auditFilterSec) &&
-            (auditFilterScheme === "all" || (i.schemes || []).includes(auditFilterScheme)));
-          return (<div>
-            <button onClick={() => setView("audits")} style={{ background: "transparent", border: "none", color: C.accent, cursor: "pointer", fontSize: 13, fontWeight: 600, marginBottom: 18, padding: 0 }}>← Back to Audits</button>
-            <div style={{ ...card, marginBottom: 20 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16 }}>
-                <div style={{ flex: 1, minWidth: 220 }}>
-                  <Badge color={C.accent} bg={C.accentSoft}>Combined Audit</Badge>
-                  <h2 style={{ fontSize: 22, fontWeight: 700, margin: "10px 0 4px" }}>{audit.title}</h2>
-                  <div style={{ color: C.textMuted, fontSize: 13 }}>Covers all schemes{audit.auditDate ? ` · 📅 ${audit.auditDate}` : ""}</div>
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-                  <div style={{ textAlign: "center" }}><Ring percent={pct} size={56} stroke={5} color={pct === 100 ? C.green : pct >= 50 ? C.amber : C.red} /><div style={{ fontSize: 11, color: C.textMuted, marginTop: 4 }}>{pct}% ready</div></div>
-                </div>
-              </div>
-              {/* Per-scheme readiness summary — the "comply many" payoff */}
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 8, marginTop: 16 }}>
-                {Object.entries(AUDIT_SCHEME_TAGS).map(([k, s]) => { const p = auditSchemeProgress(audit, k, auditCtx); const pp = p ? p.pct : 0; return (
-                  <div key={k} onClick={() => setAuditFilterScheme(auditFilterScheme === k ? "all" : k)} title="Filter by this scheme" style={{ padding: "10px 12px", borderRadius: 10, background: C.surfaceAlt, border: `1px solid ${auditFilterScheme === k ? s.color : C.border}`, cursor: "pointer" }}>
-                    <div style={{ fontSize: 11, fontWeight: 700, color: s.color }}>{s.name}</div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
-                      <div style={{ flex: 1, height: 5, background: C.border, borderRadius: 99, overflow: "hidden" }}><div style={{ width: `${pp}%`, height: "100%", background: pp === 100 ? C.green : pp >= 50 ? C.amber : C.red, borderRadius: 99 }} /></div>
-                      <span style={{ fontSize: 10, fontFamily: "'JetBrains Mono', monospace", color: C.textMuted }}>{p ? `${p.ready}/${p.total}` : "—"}</span>
-                    </div>
-                  </div>); })}
-              </div>
-              <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap", alignItems: "center" }}>
-                <select value={exportScope} onChange={e => setExportScope(e.target.value)} style={{ padding: "9px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surfaceAlt, color: C.text, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>
-                  <option value="all">All schemes</option>
-                  {Object.entries(AUDIT_SCHEME_TAGS).map(([k, s]) => <option key={k} value={k}>{s.name}</option>)}
-                </select>
-                <button onClick={() => exportAuditPack(audit, auditCtx, emps, docs, exportScope)} style={{ padding: "9px 16px", borderRadius: 8, border: "none", background: "rgba(34,197,94,0.15)", color: C.green, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>📊 Export Audit Pack</button>
-                <select value={audit.status} onChange={e => saveAudit({ ...audit, status: e.target.value })} style={{ padding: "9px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surfaceAlt, color: C.text, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>
-                  <option value="planning">Planning</option><option value="in_progress">In Progress</option><option value="complete">Complete</option>
-                </select>
-                <button onClick={() => { if (window.confirm(`Delete audit "${audit.title}"?`)) removeAudit(audit.id); }} style={{ marginLeft: "auto", padding: "9px 14px", borderRadius: 8, border: "none", background: C.redSoft, color: C.red, fontWeight: 600, fontSize: 12, cursor: "pointer" }}>Delete</button>
-              </div>
-            </div>
-            <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
-              <span style={{ fontSize: 11, color: C.textDim, textTransform: "uppercase", letterSpacing: 0.6, fontWeight: 600, marginRight: 4 }}>Scheme:</span>
-              <button onClick={() => setAuditFilterScheme("all")} style={{ ...nb(auditFilterScheme === "all"), padding: "5px 11px", fontSize: 12 }}>All</button>
-              {Object.entries(AUDIT_SCHEME_TAGS).map(([k, s]) => (<button key={k} onClick={() => setAuditFilterScheme(k)} style={{ padding: "5px 11px", borderRadius: 8, border: "none", fontWeight: 600, fontSize: 12, cursor: "pointer", color: auditFilterScheme === k ? "#fff" : s.color, background: auditFilterScheme === k ? s.color : `${s.color}1a` }}>{s.name}</button>))}
-            </div>
-            <div style={{ display: "flex", gap: 6, marginBottom: 18, flexWrap: "wrap", alignItems: "center" }}>
-              <span style={{ fontSize: 11, color: C.textDim, textTransform: "uppercase", letterSpacing: 0.6, fontWeight: 600, marginRight: 4 }}>Category:</span>
-              <button onClick={() => setAuditFilterSec("all")} style={{ ...nb(auditFilterSec === "all"), padding: "5px 11px", fontSize: 12 }}>All</button>
-              {sections.map(s => (<button key={s.id} onClick={() => setAuditFilterSec(s.id)} style={{ ...nb(auditFilterSec === s.id), padding: "5px 11px", fontSize: 12 }}>{s.name}</button>))}
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {shownItems.map(item => {
-                const eff = auditItemStatus(item, auditCtx); const st = AUDIT_STAT[eff];
-                const ev = item.auto ? autoEvaluateAudit(item.auto, emps, docs, obSubs) : null;
-                return (<div key={item.id} style={{ ...card, padding: "16px 18px" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
-                    <div style={{ flex: 1, minWidth: 220 }}>
-                      <div style={{ fontWeight: 600, fontSize: 14 }}>{item.req}{item.auto && <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, color: C.accent, background: C.accentSoft, padding: "2px 7px", borderRadius: 99, textTransform: "uppercase", letterSpacing: 0.5 }}>Auto</span>}</div>
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 6 }}>{(item.schemes || []).map(k => { const s = AUDIT_SCHEME_TAGS[k]; if (!s) return null; return <span key={k} title={s.name} style={{ fontSize: 9.5, fontWeight: 700, padding: "1px 6px", borderRadius: 99, color: s.color, background: `${s.color}1a` }}>{s.short}</span>; })}</div>
-                      {item.guidance && <div style={{ fontSize: 12, color: C.textMuted, marginTop: 6, lineHeight: 1.55 }}>{item.guidance}</div>}
-                      {ev && <div style={{ fontSize: 12, color: st.color, marginTop: 6, fontWeight: 500 }}>● {ev.detail}</div>}
-                    </div>
-                    {item.auto
-                      ? <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}><Badge color={st.color} bg={st.bg}>{st.label}{ev?.metric ? ` · ${ev.metric}` : ""}</Badge><button onClick={() => updateAuditItem(audit.id, item.id, { status: item.status === "na" ? "not_started" : "na" })} style={{ background: "transparent", border: `1px solid ${C.border}`, color: C.textMuted, padding: "3px 8px", borderRadius: 6, fontSize: 10, fontWeight: 600, cursor: "pointer" }}>{item.status === "na" ? "Use auto" : "Mark N/A"}</button></div>
-                      : <button onClick={() => cycleAuditStatus(audit.id, item)} title="Click to change status" style={{ border: "none", cursor: "pointer", padding: "4px 12px", borderRadius: 99, fontSize: 11, fontWeight: 600, color: st.color, background: st.bg }}>{st.label} ▾</button>}
-                  </div>
-                  <div style={{ marginTop: 12 }}>
-                    {auditFolderUrl(item.id) && <a href={auditFolderUrl(item.id)} target="_blank" rel="noopener noreferrer" title="Open this requirement's OneDrive evidence folder" style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, color: C.accent, textDecoration: "none", background: C.accentSoft, border: `1px solid ${C.border}`, padding: "6px 11px", borderRadius: 7, marginBottom: 8, marginRight: 8 }}>📁 Evidence folder ↗</a>}
-                    {(item.evidence || []).length > 0 && <div style={{ display: "flex", flexDirection: "column", gap: 5, marginBottom: 8 }}>{(item.evidence || []).map((e, idx) => (<div key={idx} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, background: C.surfaceAlt, borderRadius: 7, padding: "6px 10px" }}><span style={{ flex: 1 }}>{e.type === "link" ? <a href={e.url} target="_blank" rel="noopener noreferrer" style={{ color: C.accent, textDecoration: "none" }}>🔗 {e.label} ↗</a> : <span style={{ color: C.text }}>📝 {e.text}</span>}</span><button onClick={() => removeAuditEvidence(audit.id, item.id, idx)} style={{ background: "transparent", border: "none", color: C.textDim, cursor: "pointer", fontSize: 14 }}>✕</button></div>))}</div>}
-                    {evDraft.itemId === item.id ? (
-                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-                        <input value={evDraft.label} onChange={e => setEvDraft({ ...evDraft, label: e.target.value })} placeholder="Label / note" style={{ ...inp, flex: 1, minWidth: 120, padding: "7px 10px", fontSize: 12 }} />
-                        <input value={evDraft.url} onChange={e => setEvDraft({ ...evDraft, url: e.target.value })} placeholder="Link URL (optional)" style={{ ...inp, flex: 1, minWidth: 120, padding: "7px 10px", fontSize: 12 }} />
-                        <button onClick={() => addAuditEvidence(audit.id, item.id)} style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 12, cursor: "pointer" }}>Add</button>
-                        <button onClick={() => setEvDraft({ itemId: null, label: "", url: "" })} style={{ padding: "7px 12px", borderRadius: 7, border: `1px solid ${C.border}`, background: "transparent", color: C.textMuted, fontSize: 12, cursor: "pointer" }}>{t.cancel}</button>
-                      </div>
-                    ) : (
-                      <button onClick={() => setEvDraft({ itemId: item.id, label: "", url: "" })} style={{ background: "transparent", border: `1px dashed ${C.border}`, color: C.accent, padding: "6px 12px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ Add evidence</button>
-                    )}
-                    <textarea value={item.notes || ""} onChange={e => updateAuditItem(audit.id, item.id, { notes: e.target.value })} placeholder="Notes for the auditor…" rows={2} style={{ ...inp, marginTop: 8, resize: "vertical", fontSize: 12, lineHeight: 1.5 }} />
-                  </div>
-                </div>);
-              })}
-            </div>
-          </div>);
-        })()}
-
-        {view === "assistant" && isManager && <AssistantView emps={emps} docs={docs} obDocs={obDocs} obSubs={obSubs} />}
-
         {view === "detail" && sel && (() => {
           const ad = getAssignedDocs(docs, sel.id); const dp = docPct(sel.docChecks, ad);
           const showPick = sel.trackPickRate !== false;
           return (<div>
             <button onClick={() => setView("employees")} style={{ background: "transparent", border: "none", color: C.accent, cursor: "pointer", fontSize: 13, fontWeight: 600, marginBottom: 18, padding: 0 }}>{t.backToEmployees}</button>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20, flexWrap: "wrap", gap: 12 }}><div><h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 2 }}>{sel.name}{sel.archived ? " (Archived)" : ""}</h2><div style={{ color: C.textMuted, fontSize: 13 }}>{sel.role}{sel.username ? ` · @${sel.username}` : ""} · {t.startDate}: {sel.startDate || "—"}</div></div><div style={{ display: "flex", gap: 8 }}>{isManager && <button onClick={async () => { await saveEmp({ ...sel, archived: !sel.archived }); }} style={{ padding: "7px 14px", borderRadius: 7, border: `1px solid ${C.border}`, background: sel.archived ? C.greenSoft : C.amberSoft, color: sel.archived ? C.green : C.amber, fontWeight: 600, fontSize: 11, cursor: "pointer" }}>{sel.archived ? "Restore" : "Archive"}</button>}{isManager && <button onClick={async () => { await saveEmp({ ...sel, trackPickRate: !showPick }); }} style={{ padding: "7px 14px", borderRadius: 7, border: `1px solid ${C.border}`, background: showPick ? C.accentSoft : "transparent", color: showPick ? C.accent : C.textDim, fontWeight: 600, fontSize: 11, cursor: "pointer" }}>{showPick ? "✓ " : ""}{t.pickRate}</button>}{isManager && <button onClick={() => { if (window.confirm(`${t.remove} ${sel.name}?`)) remE(sel.id); }} style={{ background: C.redSoft, border: "none", color: C.red, padding: "7px 16px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{t.removeEmployee}</button>}</div></div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20, flexWrap: "wrap", gap: 12 }}><div><h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 2 }}>{sel.name}{sel.archived ? " (Archived)" : ""}{sel.employmentType !== "permanent" ? <span style={{ marginLeft: 8, padding: "2px 8px", borderRadius: 5, fontSize: 12, fontWeight: 600, background: sel.employmentType === "seasonal" ? C.amberSoft : C.accentSoft, color: sel.employmentType === "seasonal" ? C.amber : C.accent }}>{sel.employmentType}</span> : ""}</h2><div style={{ color: C.textMuted, fontSize: 13 }}>{sel.role}{sel.username ? ` · @${sel.username}` : ""} · {t.startDate}: {sel.startDate || "—"}{sel.endDate ? ` · End: ${sel.endDate}` : ""}</div></div><div style={{ display: "flex", gap: 8 }}>{isManager && <button onClick={async () => { await saveEmp({ ...sel, archived: !sel.archived }); }} style={{ padding: "7px 14px", borderRadius: 7, border: `1px solid ${C.border}`, background: sel.archived ? C.greenSoft : C.amberSoft, color: sel.archived ? C.green : C.amber, fontWeight: 600, fontSize: 11, cursor: "pointer" }}>{sel.archived ? "Restore" : "Archive"}</button>}{isManager && <button onClick={async () => { await saveEmp({ ...sel, trackPickRate: !showPick }); }} style={{ padding: "7px 14px", borderRadius: 7, border: `1px solid ${C.border}`, background: showPick ? C.accentSoft : "transparent", color: showPick ? C.accent : C.textDim, fontWeight: 600, fontSize: 11, cursor: "pointer" }}>{showPick ? "✓ " : ""}{t.pickRate}</button>}{isManager && <button onClick={() => { if (window.confirm(`${t.remove} ${sel.name}?`)) remE(sel.id); }} style={{ background: C.redSoft, border: "none", color: C.red, padding: "7px 16px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{t.removeEmployee}</button>}</div></div>
             <div style={{ display: "grid", gridTemplateColumns: showPick ? "1fr 1fr" : "1fr", gap: 18 }}>
               {showPick && <div style={card}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}><div><div style={{ fontWeight: 700, fontSize: 15 }}>{t.pickRateHistory}</div><div style={{ color: C.textMuted, fontSize: 12, marginTop: 2 }}>{t.weeklyTracking}</div></div><button onClick={() => setShowAP(true)} style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 12, cursor: "pointer" }}>{t.addWeek}</button></div><div style={{ overflowX: "auto", marginBottom: 8 }}><PickChart history={sel.pickHistory} width={420} height={160} t={t} /></div>{sel.pickHistory.length > 0 && <div style={{ maxHeight: 140, overflowY: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr style={{ borderBottom: `1px solid ${C.border}` }}><th style={{ fontSize: 11, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, fontWeight: 600, padding: "6px 8px", textAlign: "left", whiteSpace: "nowrap" }}>{t.wk}</th><th style={{ fontSize: 11, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, fontWeight: 600, padding: "6px 8px", textAlign: "left", whiteSpace: "nowrap" }}>{t.week}</th><th style={{ fontSize: 11, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, fontWeight: 600, padding: "6px 8px", textAlign: "right", whiteSpace: "nowrap" }}>{t.rate}</th><th style={{ fontSize: 11, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, fontWeight: 600, padding: "6px 8px", textAlign: "right", whiteSpace: "nowrap" }}>{t.target}</th><th style={{ width: 28 }}></th></tr></thead><tbody>{[...sel.pickHistory].reverse().map((p, i) => { const tgt = getTarget(p.wk); const met = p.rate >= tgt; return (<tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}><td style={{ padding: "6px 8px", fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: C.textMuted }}>{p.wk}</td><td style={{ padding: "6px 8px", fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: C.textDim }}>{p.date}</td><td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", color: met ? C.green : C.red }}>{typeof p.rate === "number" ? p.rate.toFixed(1) : p.rate}</td><td style={{ padding: "6px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: C.targetYellow }}>{typeof tgt === "number" ? tgt.toFixed(1) : tgt}</td><td style={{ padding: "6px 4px", textAlign: "right" }}><button onClick={async () => { const newHist = sel.pickHistory.filter((_, j) => j !== sel.pickHistory.length - 1 - i); await saveEmp({ ...sel, pickHistory: newHist }); }} style={{ background: "transparent", border: "none", color: C.textDim, cursor: "pointer", fontSize: 11 }}>✕</button></td></tr>); })}</tbody></table></div>}</div>}
               <div style={card}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}><div><div style={{ fontWeight: 700, fontSize: 15 }}>{t.docProgress}</div><div style={{ color: C.textMuted, fontSize: 12, marginTop: 2 }}>{t.assignedDocs}</div></div><div style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center" }}><Ring percent={dp} size={50} stroke={5} color={dp === 100 ? C.green : dp >= 50 ? C.amber : C.red} /><span style={{ position: "absolute", fontSize: 11, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>{dp}%</span></div></div>{ad.length === 0 && <div style={{ color: C.textDim }}>{t.noDocsAssigned}</div>}<div style={{ display: "flex", flexDirection: "column", gap: 5, maxHeight: 300, overflowY: "auto" }}>{["sop", "contract"].map(type => { const td = ad.filter(d => d.type === type); if (!td.length) return null; return (<div key={type}><div style={{ fontSize: 10, color: C.textDim, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.8, margin: "8px 0 6px" }}>{type === "sop" ? t.sopsDocs : t.contractsDocs}</div>{td.map(doc => <EmpDocItem key={doc.id} doc={doc} emp={sel} isMgr={true} />)}</div>); })}</div></div>
