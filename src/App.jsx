@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import * as XLSX from "xlsx";
-import { supabase } from "./supabaseClient.js";
+import { supabase, signIn, signOut, getUser, onAuthChange } from "./supabaseClient.js";
 
 // ── Supabase data hooks ──
 function useEmployees() {
@@ -696,6 +696,7 @@ export default function App() {
 
   const [auth, setAuth] = useState(null);
   const [pin, setPin] = useState(""); const [loginUser, setLoginUser] = useState(""); const [lErr, setLErr] = useState("");
+  const [mgrMode, setMgrMode] = useState(false); const [mgrEmail, setMgrEmail] = useState(""); const [mgrPw, setMgrPw] = useState(""); const [mgrBusy, setMgrBusy] = useState(false);
   const [view, setView] = useState("dashboard"); const [selId, setSelId] = useState(null);
   const [search, setSearch] = useState(""); const [sigDocId, setSigDocId] = useState(null); const [viewSig, setViewSig] = useState(null);
   const [showAE, setShowAE] = useState(false); const [showAD, setShowAD] = useState(false); const [showAP, setShowAP] = useState(false); const [showAssign, setShowAssign] = useState(null);
@@ -716,12 +717,33 @@ export default function App() {
     return () => clearInterval(interval);
   }, [refreshEmps, refreshDocs, refreshObSubs]);
 
+  // Managers sign in with a real Supabase account. If a manager session exists,
+  // treat them as the "manager" role. Employees use the username+PIN path below,
+  // which never creates a Supabase session, so this leaves them untouched.
+  useEffect(() => {
+    let alive = true;
+    getUser().then(u => { if (alive && u) setAuth(a => a || { role: "manager", email: u.email }); });
+    const unsub = onAuthChange(u => {
+      if (u) setAuth(a => (a && a.role === "manager") ? a : { role: "manager", email: u.email });
+      else setAuth(a => (a && a.role === "manager") ? null : a);
+    });
+    return () => { alive = false; unsub && unsub(); };
+  }, []);
+
   const t = T[lang] || T.en;
   const loaded = eL && dL && sL && obDL && obSL;
   const isEmp = auth?.role === "employee";
   const empSelf = isEmp ? emps.find(e => e.id === auth.id) : null;
   const sel = emps.find(e => e.id === selId);
   const authUser = auth ? emps.find(e => e.id === auth.id) : null;
+
+  const mgrLogin = async () => {
+    setLErr(""); setMgrBusy(true);
+    try { await signIn(mgrEmail, mgrPw); setMgrEmail(""); setMgrPw(""); }
+    catch { setLErr("Email or password not recognised."); }
+    finally { setMgrBusy(false); }
+  };
+  const managerSignOut = async () => { try { await signOut(); } catch {} setAuth(null); };
 
   const login = () => {
     setLErr("");
@@ -924,12 +946,20 @@ export default function App() {
         <div style={{ position: "absolute", top: 16, right: 16 }}><LangSel lang={lang} setLang={setLang} /></div>
         <div style={{ width: 56, height: 56, borderRadius: 16, background: `linear-gradient(135deg, ${C.accent}, ${C.purple})`, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 26, fontWeight: 700, color: "#fff", marginBottom: 18 }}>P</div>
         <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>{t.appName}</h1>
-        <p style={{ color: C.textMuted, fontSize: 13, marginBottom: 28 }}>{t.pinPrompt}</p>
-        <input type="text" value={loginUser} onChange={e => { setLoginUser(e.target.value); setLErr(""); }} placeholder="Username" style={{ ...inp, textAlign: "center", fontSize: 15, marginBottom: 10, fontFamily: "'DM Sans', sans-serif" }} autoFocus autoComplete="username" />
-        <input type="password" maxLength={8} value={pin} onChange={e => { setPin(e.target.value.replace(/\D/g, "")); setLErr(""); }} onKeyDown={e => e.key === "Enter" && login()} placeholder={t.pinPlaceholder} style={{ ...inp, textAlign: "center", fontSize: 22, letterSpacing: 8, fontFamily: "'JetBrains Mono', monospace", marginBottom: 16 }} autoComplete="current-password" />
-        {lErr && <div style={{ color: C.red, fontSize: 12, marginBottom: 12 }}>{lErr}</div>}
-        <button onClick={login} style={{ width: "100%", padding: "12px", borderRadius: 10, border: "none", background: C.accent, color: "#fff", fontWeight: 700, fontSize: 14, cursor: "pointer", marginBottom: 20 }}>{t.signIn}</button>
-        {emps.length === 0 && <div style={{ fontSize: 11, color: C.textDim, lineHeight: 1.6 }}>{t.manager} PIN: 0000<br/>Add employees in the manager dashboard</div>}
+        <p style={{ color: C.textMuted, fontSize: 13, marginBottom: 28 }}>{mgrMode ? "Manager sign in" : t.pinPrompt}</p>
+        {!mgrMode ? (<>
+          <input type="text" value={loginUser} onChange={e => { setLoginUser(e.target.value); setLErr(""); }} placeholder="Username" style={{ ...inp, textAlign: "center", fontSize: 15, marginBottom: 10, fontFamily: "'DM Sans', sans-serif" }} autoFocus autoComplete="username" />
+          <input type="password" maxLength={8} value={pin} onChange={e => { setPin(e.target.value.replace(/\D/g, "")); setLErr(""); }} onKeyDown={e => e.key === "Enter" && login()} placeholder={t.pinPlaceholder} style={{ ...inp, textAlign: "center", fontSize: 22, letterSpacing: 8, fontFamily: "'JetBrains Mono', monospace", marginBottom: 16 }} autoComplete="current-password" />
+          {lErr && <div style={{ color: C.red, fontSize: 12, marginBottom: 12 }}>{lErr}</div>}
+          <button onClick={login} style={{ width: "100%", padding: "12px", borderRadius: 10, border: "none", background: C.accent, color: "#fff", fontWeight: 700, fontSize: 14, cursor: "pointer", marginBottom: 14 }}>{t.signIn}</button>
+          <div onClick={() => { setMgrMode(true); setLErr(""); }} style={{ fontSize: 12, color: C.textMuted, cursor: "pointer", textDecoration: "underline" }}>Manager sign in</div>
+        </>) : (<>
+          <input type="email" value={mgrEmail} onChange={e => { setMgrEmail(e.target.value); setLErr(""); }} onKeyDown={e => e.key === "Enter" && mgrLogin()} placeholder="Email" style={{ ...inp, textAlign: "center", fontSize: 15, marginBottom: 10, fontFamily: "'DM Sans', sans-serif" }} autoFocus autoComplete="username" />
+          <input type="password" value={mgrPw} onChange={e => { setMgrPw(e.target.value); setLErr(""); }} onKeyDown={e => e.key === "Enter" && mgrLogin()} placeholder="Password" style={{ ...inp, textAlign: "center", fontSize: 15, marginBottom: 16, fontFamily: "'DM Sans', sans-serif" }} autoComplete="current-password" />
+          {lErr && <div style={{ color: C.red, fontSize: 12, marginBottom: 12 }}>{lErr}</div>}
+          <button onClick={mgrLogin} disabled={mgrBusy} style={{ width: "100%", padding: "12px", borderRadius: 10, border: "none", background: C.accent, color: "#fff", fontWeight: 700, fontSize: 14, cursor: mgrBusy ? "default" : "pointer", opacity: mgrBusy ? 0.6 : 1, marginBottom: 14 }}>{mgrBusy ? "Signing in…" : t.signIn}</button>
+          <div onClick={() => { setMgrMode(false); setLErr(""); }} style={{ fontSize: 12, color: C.textMuted, cursor: "pointer", textDecoration: "underline" }}>← Employee sign in</div>
+        </>)}
       </div>
     </div>
   );
@@ -1057,7 +1087,7 @@ export default function App() {
           <button style={nb(view === "onboarding")} onClick={() => setView("onboarding")}>Onboarding</button>
           {isManager && <button onClick={() => exportXLS(activeEmps, docs, t)} style={{ padding: "9px 16px", borderRadius: 8, border: "none", background: "rgba(34,197,94,0.15)", color: C.green, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>📊 {t.exportExcel}</button>}
           <div style={{ width: 1, height: 24, background: C.border, margin: "0 4px" }} /><LangSel lang={lang} setLang={setLang} />
-          <button onClick={() => setAuth(null)} style={{ ...nb(false), color: C.red, fontSize: 12 }}>{t.signOut}</button>
+          <button onClick={managerSignOut} style={{ ...nb(false), color: C.red, fontSize: 12 }}>{t.signOut}</button>
         </div>
       </div>
       <div style={{ maxWidth: 980, margin: "0 auto", padding: "28px 20px" }}>
