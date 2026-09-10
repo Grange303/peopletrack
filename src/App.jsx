@@ -697,6 +697,7 @@ export default function App() {
   const [auth, setAuth] = useState(null);
   const [pin, setPin] = useState(""); const [loginUser, setLoginUser] = useState(""); const [lErr, setLErr] = useState("");
   const [mgrMode, setMgrMode] = useState(false); const [mgrEmail, setMgrEmail] = useState(""); const [mgrPw, setMgrPw] = useState(""); const [mgrBusy, setMgrBusy] = useState(false);
+  const [empRecord, setEmpRecord] = useState(null); const [empSubs, setEmpSubs] = useState([]); const [empCreds, setEmpCreds] = useState(null); const [obRedo, setObRedo] = useState(null);
   const [view, setView] = useState("dashboard"); const [selId, setSelId] = useState(null);
   const [search, setSearch] = useState(""); const [sigDocId, setSigDocId] = useState(null); const [viewSig, setViewSig] = useState(null);
   const [showAE, setShowAE] = useState(false); const [showAD, setShowAD] = useState(false); const [showAP, setShowAP] = useState(false); const [showAssign, setShowAssign] = useState(null);
@@ -717,23 +718,32 @@ export default function App() {
     return () => clearInterval(interval);
   }, [refreshEmps, refreshDocs, refreshObSubs]);
 
-  // Managers sign in with a real Supabase account. If a manager session exists,
-  // treat them as the "manager" role. Employees use the username+PIN path below,
-  // which never creates a Supabase session, so this leaves them untouched.
+  // Managers and supervisors sign in with a real Supabase account. Their role
+  // (full manager vs limited supervisor) comes from their own staff record,
+  // matched by email. Employees use the username+PIN path below and never create
+  // a session, so this leaves them untouched.
   useEffect(() => {
     let alive = true;
-    getUser().then(u => { if (alive && u) setAuth(a => a || { role: "manager", email: u.email }); });
-    const unsub = onAuthChange(u => {
-      if (u) setAuth(a => (a && a.role === "manager") ? a : { role: "manager", email: u.email });
-      else setAuth(a => (a && a.role === "manager") ? null : a);
-    });
+    const applySession = async (u) => {
+      if (!u) { setAuth(a => (a && (a.role === "manager" || a.role === "supervisor")) ? null : a); return; }
+      let role = "manager", id = null;
+      try {
+        const { data } = await supabase.from("employees").select("id, account_type").eq("email", u.email).maybeSingle();
+        if (data) { id = data.id; if ((data.account_type || "") === "supervisor") role = "supervisor"; }
+      } catch {}
+      if (!alive) return;
+      setAuth({ role, id, email: u.email });
+      refreshEmps(); refreshDocs(); refreshObSubs();
+    };
+    getUser().then(u => { if (alive && u) applySession(u); });
+    const unsub = onAuthChange(u => applySession(u));
     return () => { alive = false; unsub && unsub(); };
-  }, []);
+  }, [refreshEmps, refreshDocs, refreshObSubs]);
 
   const t = T[lang] || T.en;
   const loaded = eL && dL && sL && obDL && obSL;
   const isEmp = auth?.role === "employee";
-  const empSelf = isEmp ? emps.find(e => e.id === auth.id) : null;
+  const empSelf = isEmp ? empRecord : null;
   const sel = emps.find(e => e.id === selId);
   const authUser = auth ? emps.find(e => e.id === auth.id) : null;
 
@@ -743,15 +753,27 @@ export default function App() {
     catch { setLErr("Email or password not recognised."); }
     finally { setMgrBusy(false); }
   };
-  const managerSignOut = async () => { try { await signOut(); } catch {} setAuth(null); };
+  const managerSignOut = async () => { try { await signOut(); } catch {} setAuth(null); setEmpRecord(null); setEmpSubs([]); setEmpCreds(null); };
+  const empSignOut = () => { setAuth(null); setEmpRecord(null); setEmpSubs([]); setEmpCreds(null); setObRedo(null); };
 
-  const login = () => {
+  const login = async () => {
     setLErr("");
     const trimUser = loginUser.trim().toLowerCase();
     if (!trimUser || !pin) { setLErr(t.pinError); return; }
-    const e = emps.find(e => (e.username || "").toLowerCase() === trimUser && e.pin === pin);
-    if (e) {
-      setAuth({ role: e.accountType || "employee", id: e.id });
+    const { data } = await supabase.rpc("pt_emp_login", { p_username: trimUser, p_pin: pin });
+    const row = Array.isArray(data) ? data[0] : null;
+    if (row) {
+      setEmpRecord({
+        id: row.id, name: row.name, role: row.role, accountType: row.account_type,
+        pickHistory: row.pick_history || [], docChecks: row.doc_checks || {},
+        notes: row.notes || "", trackPickRate: row.track_pick_rate !== false
+      });
+      setEmpCreds({ username: trimUser, pin });
+      try {
+        const { data: obs } = await supabase.rpc("pt_emp_onboarding", { p_username: trimUser, p_pin: pin });
+        setEmpSubs(Array.isArray(obs) ? obs : []);
+      } catch { setEmpSubs([]); }
+      setAuth({ role: "employee", id: row.id });
       setPin(""); setLoginUser(""); return;
     }
     setLErr(t.pinError);
@@ -800,20 +822,31 @@ export default function App() {
     await saveEmp({ ...emp, pickHistory: [...emp.pickHistory, { date: nPD, wk: w, rate: r }].sort((a, b) => a.date.localeCompare(b.date)) });
     sNPR(""); sNPD(todayDate()); sNPW(""); setShowAP(false);
   };
-  const reviewSOP = async (empId, docId) => {
+  // Apply a document check (SOP review / contract sign / open). Employees go
+  // through the PIN-gated function so they can only ever touch their own record;
+  // managers and supervisors write directly.
+  const applyDocCheck = async (empId, docId, check) => {
+    if (auth?.role === "employee" && empCreds) {
+      const { data } = await supabase.rpc("pt_emp_sign", { p_username: empCreds.username, p_pin: empCreds.pin, p_doc_id: docId, p_check: check });
+      if (data) setEmpRecord(r => r ? { ...r, docChecks: data } : r);
+      return;
+    }
     const emp = emps.find(e => e.id === empId); if (!emp) return;
-    await saveEmp({ ...emp, docChecks: { ...emp.docChecks, [docId]: { date: todayDate(), dateTime: nowDateTime(), sig: null, signedBy: emp.name } } });
+    await saveEmp({ ...emp, docChecks: { ...emp.docChecks, [docId]: check } });
+  };
+  const nameFor = (empId) => (auth?.role === "employee" ? empRecord?.name : emps.find(e => e.id === empId)?.name) || "";
+  const checksFor = (empId) => (auth?.role === "employee" ? (empRecord?.docChecks || {}) : (emps.find(e => e.id === empId)?.docChecks || {}));
+  const reviewSOP = async (empId, docId) => {
+    await applyDocCheck(empId, docId, { date: todayDate(), dateTime: nowDateTime(), sig: null, signedBy: nameFor(empId) });
   };
   const signContract = async (empId, docId, sigData, typedName) => {
-    const emp = emps.find(e => e.id === empId); if (!emp) return;
-    await saveEmp({ ...emp, docChecks: { ...emp.docChecks, [docId]: { date: todayDate(), dateTime: nowDateTime(), sig: sigData, signedBy: emp.name, typedName } } });
+    await applyDocCheck(empId, docId, { date: todayDate(), dateTime: nowDateTime(), sig: sigData, signedBy: nameFor(empId), typedName });
     setSigDocId(null);
   };
   // Contract: employee opens Adobe link → auto-mark as "opened"
   const openContractLink = async (empId, docId, url) => {
-    const emp = emps.find(e => e.id === empId); if (!emp) return;
-    if (!emp.docChecks[docId]) {
-      await saveEmp({ ...emp, docChecks: { ...emp.docChecks, [docId]: { date: todayDate(), dateTime: nowDateTime(), sig: null, signedBy: emp.name, status: "opened" } } });
+    if (!checksFor(empId)[docId]) {
+      await applyDocCheck(empId, docId, { date: todayDate(), dateTime: nowDateTime(), sig: null, signedBy: nameFor(empId), status: "opened" });
     }
     window.open(url, "_blank");
   };
@@ -828,6 +861,12 @@ export default function App() {
   const submitOnboardingDoc = async (empId, docId, answers, sigPng) => {
     const doc = obDocs.find(d => d.id === docId);
     const flags = doc ? computeFlags(doc, answers) : [];
+    if (auth?.role === "employee" && empCreds) {
+      await supabase.rpc("pt_emp_submit_onboarding", { p_username: empCreds.username, p_pin: empCreds.pin, p_document_id: docId, p_answers: answers, p_signature: sigPng, p_flags: flags });
+      try { const { data: obs } = await supabase.rpc("pt_emp_onboarding", { p_username: empCreds.username, p_pin: empCreds.pin }); setEmpSubs(Array.isArray(obs) ? obs : []); } catch {}
+      setObOpenDocId(null); setObRedo(null);
+      return;
+    }
     const status = flags.length > 0 ? "flagged" : "submitted";
     await saveObSub({
       id: `ob_${empId}_${docId}`,
@@ -966,8 +1005,8 @@ export default function App() {
 
   // ═══════ EMPLOYEE VIEW ═══════
   if (!isManager && !isSupervisor) {
-    const empSelfView = emps.find(e => e.id === auth?.id);
-    if (!empSelfView) return <div style={{ minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", color: C.textMuted, fontFamily: "'DM Sans', sans-serif" }}><div style={{ textAlign: "center" }}><div style={{ fontSize: 16, marginBottom: 12 }}>Account not found</div><button onClick={() => setAuth(null)} style={{ padding: "9px 18px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{t.signOut}</button></div></div>;
+    const empSelfView = empRecord;
+    if (!empSelfView) return <div style={{ minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", color: C.textMuted, fontFamily: "'DM Sans', sans-serif" }}><div style={{ textAlign: "center" }}><div style={{ fontSize: 16, marginBottom: 12 }}>Account not found</div><button onClick={empSignOut} style={{ padding: "9px 18px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{t.signOut}</button></div></div>;
     const aDocs = getAssignedDocs(docs, empSelfView.id); const sp = docPct(empSelfView.docChecks, aDocs);
     const showPick = empSelfView.trackPickRate !== false;
     const last = empSelfView.pickHistory[empSelfView.pickHistory.length - 1]; const lPick = last ? last.rate : null; const lWk = last ? last.wk : null; const lTgt = lWk ? getTarget(lWk) : 14;
@@ -976,7 +1015,7 @@ export default function App() {
       <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'DM Sans', 'Segoe UI', sans-serif" }}>
         <div style={{ borderBottom: `1px solid ${C.border}`, padding: "14px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", background: C.surface, flexWrap: "wrap", gap: 8 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}><div style={{ width: 34, height: 34, borderRadius: 9, background: `linear-gradient(135deg, ${C.accent}, ${C.purple})`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, fontWeight: 700, color: "#fff" }}>P</div><div><div style={{ fontWeight: 700, fontSize: 15 }}>{t.welcome}, {empSelfView.name.split(" ")[0]}</div><div style={{ fontSize: 11, color: C.textMuted }}>{empSelfView.role}</div></div></div>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}><LangSel lang={lang} setLang={setLang} /><button onClick={() => setAuth(null)} style={{ ...nb(false), color: C.red, fontSize: 12 }}>{t.signOut}</button></div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}><LangSel lang={lang} setLang={setLang} /><button onClick={empSignOut} style={{ ...nb(false), color: C.red, fontSize: 12 }}>{t.signOut}</button></div>
         </div>
         <div style={{ maxWidth: 720, margin: "0 auto", padding: "28px 20px" }}>
           {showPick && <div style={{ ...card, marginBottom: 18 }}>
@@ -1001,7 +1040,8 @@ export default function App() {
 
               {obOpenDocId ? (() => {
                 const doc = obDocs.find(d => d.id === obOpenDocId);
-                const existing = obSubs.find(s => s.employee_id === empSelfView.id && s.document_id === obOpenDocId);
+                const existingRaw = empSubs.find(s => s.employee_id === empSelfView.id && s.document_id === obOpenDocId);
+                const existing = obRedo === obOpenDocId ? null : existingRaw;
                 if (!doc) return null;
                 // If rejected — show message with redo button
                 if (existing && existing.status === "rejected") {
@@ -1013,7 +1053,7 @@ export default function App() {
                         <div style={{ fontWeight: 700, fontSize: 15 }}>{doc.title}</div>
                         <div style={{ color: C.textMuted, fontSize: 12, marginTop: 4 }}>This document has been sent back by your manager. Please redo it below.</div>
                         {existing.manager_notes && <div style={{ marginTop: 10, padding: "8px 12px", borderRadius: 8, background: C.surfaceAlt, fontSize: 12, color: C.text, textAlign: "left" }}>Manager note: {existing.manager_notes}</div>}
-                        <button onClick={async () => { await saveObSub({ ...existing, status: "pending", answers: {}, signature_png: null, flag_reasons: [], submitted_at: null }); }} style={{ marginTop: 14, padding: "9px 22px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>Start Again</button>
+                        <button onClick={() => setObRedo(obOpenDocId)} style={{ marginTop: 14, padding: "9px 22px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>Start Again</button>
                       </div>
                     </div>
                   );
@@ -1033,11 +1073,11 @@ export default function App() {
                   );
                 }
                 // Pending/draft/no submission — show the document form
-                return <OnboardingDocView doc={doc} existing={existing} empName={empSelfView.name} t={t} defaultLang={lang} onSubmit={(ans, sig) => submitOnboardingDoc(empSelfView.id, doc.id, ans, sig)} onCancel={() => setObOpenDocId(null)} />;
+                return <OnboardingDocView doc={doc} existing={existing} empName={empSelfView.name} t={t} defaultLang={lang} onSubmit={(ans, sig) => submitOnboardingDoc(empSelfView.id, doc.id, ans, sig)} onCancel={() => { setObOpenDocId(null); setObRedo(null); }} />;
               })() : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                   {obDocs.map(doc => {
-                    const sub = obSubs.find(s => s.employee_id === empSelfView.id && s.document_id === doc.id);
+                    const sub = empSubs.find(s => s.employee_id === empSelfView.id && s.document_id === doc.id);
                     const st = sub?.status;
                     const icon = st === "approved" ? "✅" : st === "flagged" ? "⚠️" : st === "submitted" ? "📨" : st === "rejected" ? "❌" : "📋";
                     const bg = st === "approved" ? C.greenSoft : st === "flagged" || st === "submitted" ? C.amberSoft : st === "rejected" ? C.redSoft : C.surfaceAlt;
