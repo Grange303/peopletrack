@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import * as XLSX from "xlsx";
-import { supabase } from "./supabaseClient.js";
+import { supabase, signIn, signOut, getUser, onAuthChange } from "./supabaseClient.js";
 
 // ── Supabase data hooks ──
 function useEmployees() {
@@ -199,14 +199,6 @@ function getReviewStatus(docCheck, reviewMonths) {
 
 const LANG_NAMES = { en:"English",bg:"Bulgarian",kk:"Kazakh",ky:"Kyrgyz",mk:"Macedonian",ru:"Russian",uk:"Ukrainian" };
 
-const ROLES = [
-  { value: "picker", label: "Picker" },
-  { value: "operative", label: "Operative" },
-  { value: "supervisor", label: "Supervisor" },
-  { value: "casual", label: "Casual" }
-];
-function roleLabel(val) { const r = ROLES.find(r => r.value === val); return r ? r.label : val || "—"; }
-
 async function translateText(text, targetLang) {
   if (targetLang === "en") return text;
   try {
@@ -333,7 +325,7 @@ ${answersHtml}
 
 function exportXLS(activeEmps, docs, t) {
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(emps.map(emp => { const ad = getAssignedDocs(docs, emp.id); const last = emp.pickHistory[emp.pickHistory.length-1]; return { Employee:emp.name, Role:roleLabel(emp.role), Start:emp.startDate||"", "Pick Rate":last?last.rate:"N/A", Target:last?getTarget(last.wk):"N/A", "Meets Target":last?(last.rate>=getTarget(last.wk)?"Yes":"No"):"N/A", "Doc %":docPct(emp.docChecks,ad)+"%", Done:`${ad.filter(d=>emp.docChecks[d.id]).length}/${ad.length}` }; })), "Overview");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(emps.map(emp => { const ad = getAssignedDocs(docs, emp.id); const last = emp.pickHistory[emp.pickHistory.length-1]; return { Employee:emp.name, Role:emp.role, Start:emp.startDate||"", "Pick Rate":last?last.rate:"N/A", Target:last?getTarget(last.wk):"N/A", "Meets Target":last?(last.rate>=getTarget(last.wk)?"Yes":"No"):"N/A", "Doc %":docPct(emp.docChecks,ad)+"%", Done:`${ad.filter(d=>emp.docChecks[d.id]).length}/${ad.length}` }; })), "Overview");
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(emps.map(emp => { const row = { Employee:emp.name }; docs.forEach(d => { const a = d.assignedTo?.includes("all")||d.assignedTo?.includes(emp.id); if(!a)row[d.name]="Not Assigned"; else if(emp.docChecks[d.id]){const c=emp.docChecks[d.id]; if(c.status==="signed") row[d.name]=`SIGNED - Confirmed ${c.signedConfirmedAt||c.dateTime||c.date}`; else if(c.status==="opened") row[d.name]=`OPENED ${c.dateTime||c.date} - Awaiting signature`; else row[d.name]=`Reviewed ${c.dateTime||c.date}`;} else row[d.name]="INCOMPLETE"; }); return row; })), "Document Status");
   const pr=[]; emps.forEach(e=>e.pickHistory.forEach(p=>pr.push({Employee:e.name,Week:p.wk,Date:p.date,Rate:p.rate,Target:getTarget(p.wk),Met:p.rate>=getTarget(p.wk)?"Yes":"No"}))); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(pr.length?pr:[{Note:"No data"}]), "Pick Rates");
   XLSX.writeFile(wb, `PeopleTrack_${todayDate()}.xlsx`);
@@ -704,12 +696,14 @@ export default function App() {
 
   const [auth, setAuth] = useState(null);
   const [pin, setPin] = useState(""); const [loginUser, setLoginUser] = useState(""); const [lErr, setLErr] = useState("");
+  const [mgrMode, setMgrMode] = useState(false); const [mgrEmail, setMgrEmail] = useState(""); const [mgrPw, setMgrPw] = useState(""); const [mgrBusy, setMgrBusy] = useState(false);
+  const [empRecord, setEmpRecord] = useState(null); const [empSubs, setEmpSubs] = useState([]); const [empCreds, setEmpCreds] = useState(null); const [obRedo, setObRedo] = useState(null);
   const [view, setView] = useState("dashboard"); const [selId, setSelId] = useState(null);
   const [search, setSearch] = useState(""); const [sigDocId, setSigDocId] = useState(null); const [viewSig, setViewSig] = useState(null);
   const [showAE, setShowAE] = useState(false); const [showAD, setShowAD] = useState(false); const [showAP, setShowAP] = useState(false); const [showAssign, setShowAssign] = useState(null);
   const [showEditEmp, setShowEditEmp] = useState(false);
   const [editName, setEditName] = useState(""); const [editUsername, setEditUsername] = useState(""); const [editRole, setEditRole] = useState(""); const [editPin, setEditPin] = useState(""); const [editAccType, setEditAccType] = useState("employee"); const [editEmpType, setEditEmpType] = useState("permanent"); const [editStartDate, setEditStartDate] = useState(""); const [editEndDate, setEditEndDate] = useState(""); const [editPhone, setEditPhone] = useState("");
-  const [nN, sNN] = useState(""); const [nR, sNR] = useState("picker"); const [nP, sNP] = useState(""); const [nSD, sNSD] = useState(todayDate()); const [nTP, sNTP] = useState(true); const [nUN, sNUN] = useState(""); const [nRole, sNRole] = useState("employee");
+  const [nN, sNN] = useState(""); const [nR, sNR] = useState(""); const [nP, sNP] = useState(""); const [nSD, sNSD] = useState(todayDate()); const [nTP, sNTP] = useState(true); const [nUN, sNUN] = useState(""); const [nRole, sNRole] = useState("employee");
   const [nDN, sNDN] = useState(""); const [nDT, sNDT] = useState("sop"); const [nDU, sNDU] = useState(""); const [nDC, sNDC] = useState(""); const [nRM, sNRM] = useState("12");
   const [nPR, sNPR] = useState(""); const [nPD, sNPD] = useState(todayDate()); const [nPW, sNPW] = useState("");
   const [obOpenDocId, setObOpenDocId] = useState(null); const [obReviewId, setObReviewId] = useState(null);
@@ -724,20 +718,62 @@ export default function App() {
     return () => clearInterval(interval);
   }, [refreshEmps, refreshDocs, refreshObSubs]);
 
+  // Managers and supervisors sign in with a real Supabase account. Their role
+  // (full manager vs limited supervisor) comes from their own staff record,
+  // matched by email. Employees use the username+PIN path below and never create
+  // a session, so this leaves them untouched.
+  useEffect(() => {
+    let alive = true;
+    const applySession = async (u) => {
+      if (!u) { setAuth(a => (a && (a.role === "manager" || a.role === "supervisor")) ? null : a); return; }
+      let role = "manager", id = null;
+      try {
+        const { data } = await supabase.from("employees").select("id, account_type").eq("email", u.email).maybeSingle();
+        if (data) { id = data.id; if ((data.account_type || "") === "supervisor") role = "supervisor"; }
+      } catch {}
+      if (!alive) return;
+      setAuth({ role, id, email: u.email });
+      refreshEmps(); refreshDocs(); refreshObSubs();
+    };
+    getUser().then(u => { if (alive && u) applySession(u); });
+    const unsub = onAuthChange(u => applySession(u));
+    return () => { alive = false; unsub && unsub(); };
+  }, [refreshEmps, refreshDocs, refreshObSubs]);
+
   const t = T[lang] || T.en;
   const loaded = eL && dL && sL && obDL && obSL;
   const isEmp = auth?.role === "employee";
-  const empSelf = isEmp ? emps.find(e => e.id === auth.id) : null;
+  const empSelf = isEmp ? empRecord : null;
   const sel = emps.find(e => e.id === selId);
   const authUser = auth ? emps.find(e => e.id === auth.id) : null;
 
-  const login = () => {
+  const managerSignOut = async () => { try { await signOut(); } catch {} setAuth(null); setEmpRecord(null); setEmpSubs([]); setEmpCreds(null); };
+  const empSignOut = () => { setAuth(null); setEmpRecord(null); setEmpSubs([]); setEmpCreds(null); setObRedo(null); };
+  const mgrLogin = async () => {
+    setLErr(""); setMgrBusy(true);
+    try { await signIn(mgrEmail, mgrPw); setMgrEmail(""); setMgrPw(""); }
+    catch { setLErr("Email or password not recognised."); }
+    finally { setMgrBusy(false); }
+  };
+
+  const login = async () => {
     setLErr("");
     const trimUser = loginUser.trim().toLowerCase();
     if (!trimUser || !pin) { setLErr(t.pinError); return; }
-    const e = emps.find(e => (e.username || "").toLowerCase() === trimUser && e.pin === pin);
-    if (e) {
-      setAuth({ role: e.accountType || "employee", id: e.id });
+    const { data } = await supabase.rpc("pt_emp_login", { p_username: trimUser, p_pin: pin });
+    const row = Array.isArray(data) ? data[0] : null;
+    if (row) {
+      setEmpRecord({
+        id: row.id, name: row.name, role: row.role, accountType: row.account_type,
+        pickHistory: row.pick_history || [], docChecks: row.doc_checks || {},
+        notes: row.notes || "", trackPickRate: row.track_pick_rate !== false
+      });
+      setEmpCreds({ username: trimUser, pin });
+      try {
+        const { data: obs } = await supabase.rpc("pt_emp_onboarding", { p_username: trimUser, p_pin: pin });
+        setEmpSubs(Array.isArray(obs) ? obs : []);
+      } catch { setEmpSubs([]); }
+      setAuth({ role: "employee", id: row.id });
       setPin(""); setLoginUser(""); return;
     }
     setLErr(t.pinError);
@@ -757,8 +793,8 @@ export default function App() {
 
   const addE = async () => {
     if (!nN.trim() || !nP.trim()) return;
-    const emp = { id: "e" + Date.now(), name: nN.trim(), role: nR, pin: nP.trim(), username: nUN.trim().toLowerCase(), accountType: nRole, employmentType: nET, phone: nPH.trim(), startDate: nSD, endDate: nET === "seasonal" ? nED : "", pickHistory: [], docChecks: {}, notes: "", privateNotes: "", trackPickRate: nTP };
-    await saveEmp(emp); sNN(""); sNR("picker"); sNP(""); sNSD(todayDate()); sNTP(true); sNUN(""); sNRole("employee"); sNET("permanent"); sNED(""); sNPH(""); setShowAE(false);
+    const emp = { id: "e" + Date.now(), name: nN.trim(), role: nR.trim() || "Team Member", pin: nP.trim(), username: nUN.trim().toLowerCase(), accountType: nRole, employmentType: nET, phone: nPH.trim(), startDate: nSD, endDate: nET === "seasonal" ? nED : "", pickHistory: [], docChecks: {}, notes: "", privateNotes: "", trackPickRate: nTP };
+    await saveEmp(emp); sNN(""); sNR(""); sNP(""); sNSD(todayDate()); sNTP(true); sNUN(""); sNRole("employee"); sNET("permanent"); sNED(""); sNPH(""); setShowAE(false);
   };
   const remE = async (id) => { await deleteEmp(id); if (selId === id) { setSelId(null); setView("employees"); } };
   const addD = async () => {
@@ -786,20 +822,31 @@ export default function App() {
     await saveEmp({ ...emp, pickHistory: [...emp.pickHistory, { date: nPD, wk: w, rate: r }].sort((a, b) => a.date.localeCompare(b.date)) });
     sNPR(""); sNPD(todayDate()); sNPW(""); setShowAP(false);
   };
-  const reviewSOP = async (empId, docId) => {
+  // Apply a document check (SOP review / contract sign / open). Employees go
+  // through the PIN-gated function so they can only ever touch their own record;
+  // managers and supervisors write directly.
+  const applyDocCheck = async (empId, docId, check) => {
+    if (auth?.role === "employee" && empCreds) {
+      const { data } = await supabase.rpc("pt_emp_sign", { p_username: empCreds.username, p_pin: empCreds.pin, p_doc_id: docId, p_check: check });
+      if (data) setEmpRecord(r => r ? { ...r, docChecks: data } : r);
+      return;
+    }
     const emp = emps.find(e => e.id === empId); if (!emp) return;
-    await saveEmp({ ...emp, docChecks: { ...emp.docChecks, [docId]: { date: todayDate(), dateTime: nowDateTime(), sig: null, signedBy: emp.name } } });
+    await saveEmp({ ...emp, docChecks: { ...emp.docChecks, [docId]: check } });
+  };
+  const nameFor = (empId) => (auth?.role === "employee" ? empRecord?.name : emps.find(e => e.id === empId)?.name) || "";
+  const checksFor = (empId) => (auth?.role === "employee" ? (empRecord?.docChecks || {}) : (emps.find(e => e.id === empId)?.docChecks || {}));
+  const reviewSOP = async (empId, docId) => {
+    await applyDocCheck(empId, docId, { date: todayDate(), dateTime: nowDateTime(), sig: null, signedBy: nameFor(empId) });
   };
   const signContract = async (empId, docId, sigData, typedName) => {
-    const emp = emps.find(e => e.id === empId); if (!emp) return;
-    await saveEmp({ ...emp, docChecks: { ...emp.docChecks, [docId]: { date: todayDate(), dateTime: nowDateTime(), sig: sigData, signedBy: emp.name, typedName } } });
+    await applyDocCheck(empId, docId, { date: todayDate(), dateTime: nowDateTime(), sig: sigData, signedBy: nameFor(empId), typedName });
     setSigDocId(null);
   };
   // Contract: employee opens Adobe link → auto-mark as "opened"
   const openContractLink = async (empId, docId, url) => {
-    const emp = emps.find(e => e.id === empId); if (!emp) return;
-    if (!emp.docChecks[docId]) {
-      await saveEmp({ ...emp, docChecks: { ...emp.docChecks, [docId]: { date: todayDate(), dateTime: nowDateTime(), sig: null, signedBy: emp.name, status: "opened" } } });
+    if (!checksFor(empId)[docId]) {
+      await applyDocCheck(empId, docId, { date: todayDate(), dateTime: nowDateTime(), sig: null, signedBy: nameFor(empId), status: "opened" });
     }
     window.open(url, "_blank");
   };
@@ -814,6 +861,12 @@ export default function App() {
   const submitOnboardingDoc = async (empId, docId, answers, sigPng) => {
     const doc = obDocs.find(d => d.id === docId);
     const flags = doc ? computeFlags(doc, answers) : [];
+    if (auth?.role === "employee" && empCreds) {
+      await supabase.rpc("pt_emp_submit_onboarding", { p_username: empCreds.username, p_pin: empCreds.pin, p_document_id: docId, p_answers: answers, p_signature: sigPng, p_flags: flags });
+      try { const { data: obs } = await supabase.rpc("pt_emp_onboarding", { p_username: empCreds.username, p_pin: empCreds.pin }); setEmpSubs(Array.isArray(obs) ? obs : []); } catch {}
+      setObOpenDocId(null); setObRedo(null);
+      return;
+    }
     const status = flags.length > 0 ? "flagged" : "submitted";
     await saveObSub({
       id: `ob_${empId}_${docId}`,
@@ -858,7 +911,7 @@ export default function App() {
   };
   const saveEditEmp = async () => {
     if (!sel || !editName.trim() || !editPin.trim()) return;
-    await saveEmp({ ...sel, name: editName.trim(), username: editUsername.trim().toLowerCase(), role: editRole, pin: editPin.trim(), accountType: editAccType, employmentType: editEmpType, phone: editPhone.trim(), startDate: editStartDate, endDate: editEmpType === "seasonal" ? editEndDate : sel.endDate });
+    await saveEmp({ ...sel, name: editName.trim(), username: editUsername.trim().toLowerCase(), role: editRole.trim() || "Team Member", pin: editPin.trim(), accountType: editAccType, employmentType: editEmpType, phone: editPhone.trim(), startDate: editStartDate, endDate: editEmpType === "seasonal" ? editEndDate : sel.endDate });
     setShowEditEmp(false);
   };
 
@@ -932,20 +985,28 @@ export default function App() {
         <div style={{ position: "absolute", top: 16, right: 16 }}><LangSel lang={lang} setLang={setLang} /></div>
         <div style={{ width: 56, height: 56, borderRadius: 16, background: `linear-gradient(135deg, ${C.accent}, ${C.purple})`, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 26, fontWeight: 700, color: "#fff", marginBottom: 18 }}>P</div>
         <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>{t.appName}</h1>
-        <p style={{ color: C.textMuted, fontSize: 13, marginBottom: 28 }}>{t.pinPrompt}</p>
-        <input type="text" value={loginUser} onChange={e => { setLoginUser(e.target.value); setLErr(""); }} placeholder="Username" style={{ ...inp, textAlign: "center", fontSize: 15, marginBottom: 10, fontFamily: "'DM Sans', sans-serif" }} autoFocus autoComplete="username" />
-        <input type="password" maxLength={8} value={pin} onChange={e => { setPin(e.target.value.replace(/\D/g, "")); setLErr(""); }} onKeyDown={e => e.key === "Enter" && login()} placeholder={t.pinPlaceholder} style={{ ...inp, textAlign: "center", fontSize: 22, letterSpacing: 8, fontFamily: "'JetBrains Mono', monospace", marginBottom: 16 }} autoComplete="current-password" />
-        {lErr && <div style={{ color: C.red, fontSize: 12, marginBottom: 12 }}>{lErr}</div>}
-        <button onClick={login} style={{ width: "100%", padding: "12px", borderRadius: 10, border: "none", background: C.accent, color: "#fff", fontWeight: 700, fontSize: 14, cursor: "pointer", marginBottom: 20 }}>{t.signIn}</button>
-        {emps.length === 0 && <div style={{ fontSize: 11, color: C.textDim, lineHeight: 1.6 }}>{t.manager} PIN: 0000<br/>Add employees in the manager dashboard</div>}
+        <p style={{ color: C.textMuted, fontSize: 13, marginBottom: 28 }}>{mgrMode ? "Manager sign in" : t.pinPrompt}</p>
+        {!mgrMode ? (<>
+          <input type="text" value={loginUser} onChange={e => { setLoginUser(e.target.value); setLErr(""); }} placeholder="Username" style={{ ...inp, textAlign: "center", fontSize: 15, marginBottom: 10, fontFamily: "'DM Sans', sans-serif" }} autoFocus autoComplete="username" />
+          <input type="password" maxLength={8} value={pin} onChange={e => { setPin(e.target.value.replace(/\D/g, "")); setLErr(""); }} onKeyDown={e => e.key === "Enter" && login()} placeholder={t.pinPlaceholder} style={{ ...inp, textAlign: "center", fontSize: 22, letterSpacing: 8, fontFamily: "'JetBrains Mono', monospace", marginBottom: 16 }} autoComplete="current-password" />
+          {lErr && <div style={{ color: C.red, fontSize: 12, marginBottom: 12 }}>{lErr}</div>}
+          <button onClick={login} style={{ width: "100%", padding: "12px", borderRadius: 10, border: "none", background: C.accent, color: "#fff", fontWeight: 700, fontSize: 14, cursor: "pointer", marginBottom: 14 }}>{t.signIn}</button>
+          <div onClick={() => { setMgrMode(true); setLErr(""); }} style={{ fontSize: 12, color: C.textMuted, cursor: "pointer", textDecoration: "underline" }}>Manager sign in</div>
+        </>) : (<>
+          <input type="email" value={mgrEmail} onChange={e => { setMgrEmail(e.target.value); setLErr(""); }} onKeyDown={e => e.key === "Enter" && mgrLogin()} placeholder="Email" style={{ ...inp, textAlign: "center", fontSize: 15, marginBottom: 10, fontFamily: "'DM Sans', sans-serif" }} autoFocus autoComplete="username" />
+          <input type="password" value={mgrPw} onChange={e => { setMgrPw(e.target.value); setLErr(""); }} onKeyDown={e => e.key === "Enter" && mgrLogin()} placeholder="Password" style={{ ...inp, textAlign: "center", fontSize: 15, marginBottom: 16, fontFamily: "'DM Sans', sans-serif" }} autoComplete="current-password" />
+          {lErr && <div style={{ color: C.red, fontSize: 12, marginBottom: 12 }}>{lErr}</div>}
+          <button onClick={mgrLogin} disabled={mgrBusy} style={{ width: "100%", padding: "12px", borderRadius: 10, border: "none", background: C.accent, color: "#fff", fontWeight: 700, fontSize: 14, cursor: mgrBusy ? "default" : "pointer", opacity: mgrBusy ? 0.6 : 1, marginBottom: 14 }}>{mgrBusy ? "Signing in…" : t.signIn}</button>
+          <div onClick={() => { setMgrMode(false); setLErr(""); }} style={{ fontSize: 12, color: C.textMuted, cursor: "pointer", textDecoration: "underline" }}>← Employee sign in</div>
+        </>)}
       </div>
     </div>
   );
 
   // ═══════ EMPLOYEE VIEW ═══════
   if (!isManager && !isSupervisor) {
-    const empSelfView = emps.find(e => e.id === auth?.id);
-    if (!empSelfView) return <div style={{ minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", color: C.textMuted, fontFamily: "'DM Sans', sans-serif" }}><div style={{ textAlign: "center" }}><div style={{ fontSize: 16, marginBottom: 12 }}>Account not found</div><button onClick={() => setAuth(null)} style={{ padding: "9px 18px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{t.signOut}</button></div></div>;
+    const empSelfView = empRecord;
+    if (!empSelfView) return <div style={{ minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", color: C.textMuted, fontFamily: "'DM Sans', sans-serif" }}><div style={{ textAlign: "center" }}><div style={{ fontSize: 16, marginBottom: 12 }}>Account not found</div><button onClick={empSignOut} style={{ padding: "9px 18px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{t.signOut}</button></div></div>;
     const aDocs = getAssignedDocs(docs, empSelfView.id); const sp = docPct(empSelfView.docChecks, aDocs);
     const showPick = empSelfView.trackPickRate !== false;
     const last = empSelfView.pickHistory[empSelfView.pickHistory.length - 1]; const lPick = last ? last.rate : null; const lWk = last ? last.wk : null; const lTgt = lWk ? getTarget(lWk) : 14;
@@ -953,8 +1014,8 @@ export default function App() {
     return (
       <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'DM Sans', 'Segoe UI', sans-serif" }}>
         <div style={{ borderBottom: `1px solid ${C.border}`, padding: "14px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", background: C.surface, flexWrap: "wrap", gap: 8 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}><div style={{ width: 34, height: 34, borderRadius: 9, background: `linear-gradient(135deg, ${C.accent}, ${C.purple})`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, fontWeight: 700, color: "#fff" }}>P</div><div><div style={{ fontWeight: 700, fontSize: 15 }}>{t.welcome}, {empSelfView.name.split(" ")[0]}</div><div style={{ fontSize: 11, color: C.textMuted }}>{roleLabel(empSelfView.role)}</div></div></div>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}><LangSel lang={lang} setLang={setLang} /><button onClick={() => setAuth(null)} style={{ ...nb(false), color: C.red, fontSize: 12 }}>{t.signOut}</button></div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}><div style={{ width: 34, height: 34, borderRadius: 9, background: `linear-gradient(135deg, ${C.accent}, ${C.purple})`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, fontWeight: 700, color: "#fff" }}>P</div><div><div style={{ fontWeight: 700, fontSize: 15 }}>{t.welcome}, {empSelfView.name.split(" ")[0]}</div><div style={{ fontSize: 11, color: C.textMuted }}>{empSelfView.role}</div></div></div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}><LangSel lang={lang} setLang={setLang} /><button onClick={empSignOut} style={{ ...nb(false), color: C.red, fontSize: 12 }}>{t.signOut}</button></div>
         </div>
         <div style={{ maxWidth: 720, margin: "0 auto", padding: "28px 20px" }}>
           {showPick && <div style={{ ...card, marginBottom: 18 }}>
@@ -979,7 +1040,8 @@ export default function App() {
 
               {obOpenDocId ? (() => {
                 const doc = obDocs.find(d => d.id === obOpenDocId);
-                const existing = obSubs.find(s => s.employee_id === empSelfView.id && s.document_id === obOpenDocId);
+                const existingRaw = empSubs.find(s => s.employee_id === empSelfView.id && s.document_id === obOpenDocId);
+                const existing = obRedo === obOpenDocId ? null : existingRaw;
                 if (!doc) return null;
                 // If rejected — show message with redo button
                 if (existing && existing.status === "rejected") {
@@ -991,7 +1053,7 @@ export default function App() {
                         <div style={{ fontWeight: 700, fontSize: 15 }}>{doc.title}</div>
                         <div style={{ color: C.textMuted, fontSize: 12, marginTop: 4 }}>This document has been sent back by your manager. Please redo it below.</div>
                         {existing.manager_notes && <div style={{ marginTop: 10, padding: "8px 12px", borderRadius: 8, background: C.surfaceAlt, fontSize: 12, color: C.text, textAlign: "left" }}>Manager note: {existing.manager_notes}</div>}
-                        <button onClick={async () => { await saveObSub({ ...existing, status: "pending", answers: {}, signature_png: null, flag_reasons: [], submitted_at: null }); }} style={{ marginTop: 14, padding: "9px 22px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>Start Again</button>
+                        <button onClick={() => setObRedo(obOpenDocId)} style={{ marginTop: 14, padding: "9px 22px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>Start Again</button>
                       </div>
                     </div>
                   );
@@ -1011,11 +1073,11 @@ export default function App() {
                   );
                 }
                 // Pending/draft/no submission — show the document form
-                return <OnboardingDocView doc={doc} existing={existing} empName={empSelfView.name} t={t} defaultLang={lang} onSubmit={(ans, sig) => submitOnboardingDoc(empSelfView.id, doc.id, ans, sig)} onCancel={() => setObOpenDocId(null)} />;
+                return <OnboardingDocView doc={doc} existing={existing} empName={empSelfView.name} t={t} defaultLang={lang} onSubmit={(ans, sig) => submitOnboardingDoc(empSelfView.id, doc.id, ans, sig)} onCancel={() => { setObOpenDocId(null); setObRedo(null); }} />;
               })() : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                   {obDocs.map(doc => {
-                    const sub = obSubs.find(s => s.employee_id === empSelfView.id && s.document_id === doc.id);
+                    const sub = empSubs.find(s => s.employee_id === empSelfView.id && s.document_id === doc.id);
                     const st = sub?.status;
                     const icon = st === "approved" ? "✅" : st === "flagged" ? "⚠️" : st === "submitted" ? "📨" : st === "rejected" ? "❌" : "📋";
                     const bg = st === "approved" ? C.greenSoft : st === "flagged" || st === "submitted" ? C.amberSoft : st === "rejected" ? C.redSoft : C.surfaceAlt;
@@ -1065,7 +1127,7 @@ export default function App() {
           <button style={nb(view === "onboarding")} onClick={() => setView("onboarding")}>Onboarding</button>
           {isManager && <button onClick={() => exportXLS(activeEmps, docs, t)} style={{ padding: "9px 16px", borderRadius: 8, border: "none", background: "rgba(34,197,94,0.15)", color: C.green, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>📊 {t.exportExcel}</button>}
           <div style={{ width: 1, height: 24, background: C.border, margin: "0 4px" }} /><LangSel lang={lang} setLang={setLang} />
-          <button onClick={() => setAuth(null)} style={{ ...nb(false), color: C.red, fontSize: 12 }}>{t.signOut}</button>
+          <button onClick={managerSignOut} style={{ ...nb(false), color: C.red, fontSize: 12 }}>{t.signOut}</button>
         </div>
       </div>
       <div style={{ maxWidth: 980, margin: "0 auto", padding: "28px 20px" }}>
@@ -1081,7 +1143,7 @@ export default function App() {
               <thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>{[t.employee, t.role, "kg/hr", t.trend, t.docProgress, t.status].map(h => (<th key={h} style={{ textAlign: "left", padding: "10px 14px", fontSize: 11, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, fontWeight: 600, whiteSpace: "nowrap" }}>{h}</th>))}</tr></thead>
               <tbody>{displayEmps.map(emp => { const ad = getAssignedDocs(docs, emp.id); const dp = docPct(emp.docChecks, ad); const last = emp.pickHistory[emp.pickHistory.length - 1]; const lp = last ? last.rate : 0; const tgt = getTarget(last ? last.wk : 0); const met = lp >= tgt; const tr = emp.pickHistory.length >= 2 ? emp.pickHistory[emp.pickHistory.length - 1].rate - emp.pickHistory[emp.pickHistory.length - 2].rate : 0;
                 return (<tr key={emp.id} onClick={() => { setSelId(emp.id); setView("detail"); }} style={{ borderBottom: `1px solid ${C.border}`, cursor: "pointer" }} onMouseEnter={e => e.currentTarget.style.background = C.surfaceAlt} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
-                  <td style={{ padding: "11px 14px", fontWeight: 600 }}>{emp.name}</td><td style={{ padding: "11px 14px", color: C.textMuted }}>{roleLabel(emp.role)}</td>
+                  <td style={{ padding: "11px 14px", fontWeight: 600 }}>{emp.name}</td><td style={{ padding: "11px 14px", color: C.textMuted }}>{emp.role}</td>
                   <td style={{ padding: "11px 14px" }}><span style={{ color: met ? C.green : C.red, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>{typeof lp === "number" ? lp.toFixed(1) : lp}</span><span style={{ color: C.textDim, fontSize: 12 }}>/{typeof tgt === "number" ? tgt.toFixed(1) : tgt}</span></td>
                   <td style={{ padding: "11px 14px" }}>{tr !== 0 ? <span style={{ fontSize: 12, fontWeight: 600, color: tr > 0 ? C.green : C.red }}>{tr > 0 ? "▲" : "▼"}{Math.abs(tr).toFixed(1)}</span> : <span style={{ color: C.textDim }}>—</span>}</td>
                   <td style={{ padding: "11px 14px" }}><div style={{ display: "flex", alignItems: "center", gap: 8 }}><div style={{ flex: 1, maxWidth: 100, height: 5, background: C.border, borderRadius: 99, overflow: "hidden" }}><div style={{ width: `${dp}%`, height: "100%", background: dp === 100 ? C.green : dp >= 50 ? C.amber : C.red, borderRadius: 99 }} /></div><span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: C.textMuted }}>{dp}%</span></div></td>
@@ -1096,7 +1158,7 @@ export default function App() {
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
             <div><h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>{t.employees}</h2><p style={{ color: C.textMuted, fontSize: 13 }}>{activeEmps.length} {t.teamMembers}{emps.length !== activeEmps.length ? ` · ${emps.length - activeEmps.length} archived` : ""}</p></div>
             <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-              <select value={roleFilter} onChange={e => setRoleFilter(e.target.value)} style={{ padding: "8px 12px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.surfaceAlt, color: C.text, fontSize: 12, outline: "none", cursor: "pointer", fontFamily: "inherit" }}><option value="all">All Roles</option>{roles.map(r => <option key={r} value={r}>{roleLabel(r)}</option>)}</select>
+              <select value={roleFilter} onChange={e => setRoleFilter(e.target.value)} style={{ padding: "8px 12px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.surfaceAlt, color: C.text, fontSize: 12, outline: "none", cursor: "pointer", fontFamily: "inherit" }}><option value="all">All Roles</option>{roles.map(r => <option key={r} value={r}>{r}</option>)}</select>
               <select value={empTypeFilter} onChange={e => setEmpTypeFilter(e.target.value)} style={{ padding: "8px 12px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.surfaceAlt, color: C.text, fontSize: 12, outline: "none", cursor: "pointer", fontFamily: "inherit" }}><option value="all">All Types</option><option value="permanent">Permanent</option><option value="seasonal">Seasonal</option><option value="casual">Casual</option></select>
               <input placeholder={t.search} value={search} onChange={e => setSearch(e.target.value)} style={{ ...inp, width: 170 }} />
               {isManager && <button onClick={() => setShowArchived(!showArchived)} style={{ padding: "7px 12px", borderRadius: 7, border: `1px solid ${C.border}`, background: showArchived ? C.amberSoft : "transparent", color: showArchived ? C.amber : C.textDim, fontWeight: 600, fontSize: 11, cursor: "pointer" }}>{showArchived ? "Hide Archived" : "Show Archived"}</button>}
@@ -1104,16 +1166,14 @@ export default function App() {
             </div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(275px, 1fr))", gap: 14 }}>
-            {displayEmps.filter(e => (roleFilter === "all" || e.role === roleFilter) && (empTypeFilter === "all" || e.employmentType === empTypeFilter) && (e.name.toLowerCase().includes(search.toLowerCase()) || roleLabel(e.role).toLowerCase().includes(search.toLowerCase()))).map(emp => { const ad = getAssignedDocs(docs, emp.id); const dp = docPct(emp.docChecks, ad); const last = emp.pickHistory[emp.pickHistory.length - 1]; const lp = last ? last.rate : 0; const tgt = getTarget(last ? last.wk : 0); const met = lp >= tgt;
+            {displayEmps.filter(e => (roleFilter === "all" || e.role === roleFilter) && (empTypeFilter === "all" || e.employmentType === empTypeFilter) && (e.name.toLowerCase().includes(search.toLowerCase()) || e.role.toLowerCase().includes(search.toLowerCase()))).map(emp => { const ad = getAssignedDocs(docs, emp.id); const dp = docPct(emp.docChecks, ad); const last = emp.pickHistory[emp.pickHistory.length - 1]; const lp = last ? last.rate : 0; const tgt = getTarget(last ? last.wk : 0); const met = lp >= tgt;
               return (<div key={emp.id} onClick={() => { setSelId(emp.id); setView("detail"); }} style={{ ...card, cursor: "pointer", transition: "border-color 0.2s", opacity: emp.archived ? 0.5 : 1 }} onMouseEnter={e => e.currentTarget.style.borderColor = C.accent} onMouseLeave={e => e.currentTarget.style.borderColor = C.border}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}><div><div style={{ fontWeight: 700, fontSize: 15, marginBottom: 2 }}>{emp.name}{emp.archived ? " (Archived)" : ""}</div><div style={{ color: C.textMuted, fontSize: 12 }}>{roleLabel(emp.role)}{emp.employmentType !== "permanent" ? <span style={{ marginLeft: 6, padding: "1px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: emp.employmentType === "seasonal" ? C.amberSoft : C.accentSoft, color: emp.employmentType === "seasonal" ? C.amber : C.accent }}>{emp.employmentType}</span> : ""}</div></div><Ring percent={dp} size={42} stroke={4} color={dp === 100 ? C.green : dp >= 50 ? C.amber : C.red} /></div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}><div><div style={{ fontWeight: 700, fontSize: 15, marginBottom: 2 }}>{emp.name}{emp.archived ? " (Archived)" : ""}</div><div style={{ color: C.textMuted, fontSize: 12 }}>{emp.role}{emp.employmentType !== "permanent" ? <span style={{ marginLeft: 6, padding: "1px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: emp.employmentType === "seasonal" ? C.amberSoft : C.accentSoft, color: emp.employmentType === "seasonal" ? C.amber : C.accent }}>{emp.employmentType}</span> : ""}</div></div><Ring percent={dp} size={42} stroke={4} color={dp === 100 ? C.green : dp >= 50 ? C.amber : C.red} /></div>
                 <div style={{ marginTop: 14, display: "flex", justifyContent: "space-between" }}><div><span style={{ fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", color: met ? C.green : C.red }}>{typeof lp === "number" ? lp.toFixed(1) : lp}</span><span style={{ fontSize: 11, color: C.textDim }}>/{typeof tgt === "number" ? tgt.toFixed(1) : tgt}</span></div><span style={{ fontSize: 11, color: C.textMuted, fontFamily: "'JetBrains Mono', monospace" }}>{dp}%</span></div>
               </div>); })}
           </div>
           {showAE && <Modal onClose={() => setShowAE(false)}><h3 style={{ fontSize: 17, fontWeight: 700, marginBottom: 18 }}>{t.addEmployee}</h3>
-            {[{ l: t.fullName, v: nN, s: sNN, p: "e.g. Jane Smith" },{ l: "Username", v: nUN, s: sNUN, p: "e.g. jsmith" }].map(f => (<div key={f.l} style={{ marginBottom: 12 }}><label style={lbl}>{f.l}</label><input value={f.v} onChange={e => f.s(e.target.value)} placeholder={f.p} style={inp} /></div>))}
-            <div style={{ marginBottom: 12 }}><label style={lbl}>{t.role}</label><select value={nR} onChange={e => sNR(e.target.value)} style={inp}>{ROLES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}</select></div>
-            {[{ l: t.pinForSignIn, v: nP, s: v => sNP(v.replace(/\D/g, "")), p: "e.g. 7777" },{ l: "Phone (for WhatsApp)", v: nPH, s: sNPH, p: "e.g. +447700900123" }].map(f => (<div key={f.l} style={{ marginBottom: 12 }}><label style={lbl}>{f.l}</label><input value={f.v} onChange={e => f.s(e.target.value)} placeholder={f.p} style={inp} /></div>))}
+            {[{ l: t.fullName, v: nN, s: sNN, p: "e.g. Jane Smith" },{ l: "Username", v: nUN, s: sNUN, p: "e.g. jsmith" },{ l: t.role, v: nR, s: sNR, p: "e.g. Warehouse Operative" },{ l: t.pinForSignIn, v: nP, s: v => sNP(v.replace(/\D/g, "")), p: "e.g. 7777" },{ l: "Phone (for WhatsApp)", v: nPH, s: sNPH, p: "e.g. +447700900123" }].map(f => (<div key={f.l} style={{ marginBottom: 12 }}><label style={lbl}>{f.l}</label><input value={f.v} onChange={e => f.s(e.target.value)} placeholder={f.p} style={inp} /></div>))}
             <div style={{ marginBottom: 12 }}><label style={lbl}>Account Type</label><div style={{ display: "flex", gap: 8 }}>{["employee", "supervisor", "manager"].map(r => (<button key={r} onClick={() => sNRole(r)} style={{ flex: 1, padding: "9px", borderRadius: 8, border: `1px solid ${nRole === r ? C.accent : C.border}`, background: nRole === r ? C.accentSoft : "transparent", color: nRole === r ? C.accent : C.textMuted, fontWeight: 600, fontSize: 12, cursor: "pointer", textTransform: "capitalize" }}>{r}</button>))}</div></div>
             <div style={{ marginBottom: 12 }}><label style={lbl}>Employment Type</label><div style={{ display: "flex", gap: 8 }}>{["permanent", "seasonal", "casual"].map(et => (<button key={et} onClick={() => sNET(et)} style={{ flex: 1, padding: "9px", borderRadius: 8, border: `1px solid ${nET === et ? C.accent : C.border}`, background: nET === et ? C.accentSoft : "transparent", color: nET === et ? C.accent : C.textMuted, fontWeight: 600, fontSize: 12, cursor: "pointer", textTransform: "capitalize" }}>{et}</button>))}</div></div>
             <div style={{ marginBottom: 12 }}><label style={lbl}>{t.startDate}</label><input type="date" value={nSD} onChange={e => sNSD(e.target.value)} style={inp} /></div>
@@ -1130,7 +1190,7 @@ export default function App() {
             <div style={{ display: "flex", gap: 8 }}><button onClick={() => exportDocProgress(activeEmps, docs)} style={{ padding: "9px 16px", borderRadius: 8, border: "none", background: "rgba(34,197,94,0.15)", color: C.green, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>📊 Export Progress</button><button onClick={() => setShowAD(true)} style={{ padding: "9px 18px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{t.addDocument}</button></div>
           </div>
           {["sop", "contract"].map(type => { const td = docs.filter(d => d.type === type); if (!td.length) return null; return (<div key={type} style={{ marginBottom: 24 }}><div style={{ ...lbl, marginBottom: 10, fontSize: 12 }}>{type === "sop" ? t.sops : t.contracts}</div><div style={{ display: "flex", flexDirection: "column", gap: 6 }}>{td.map(doc => { const aEmps = activeEmps.filter(e => doc.assignedTo?.includes("all") || doc.assignedTo?.includes(e.id)); const sc = aEmps.filter(e => e.docChecks[doc.id]).length; return (<div key={doc.id} style={{ ...card, padding: "14px 18px" }}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}><div style={{ flex: 1, minWidth: 200 }}><div style={{ fontWeight: 600, fontSize: 14 }}>{doc.type === "contract" ? "📝" : "📄"} {doc.name}</div><div style={{ fontSize: 11, color: C.textMuted, marginTop: 3 }}>{sc}/{aEmps.length} {doc.type === "contract" ? t.signed : t.reviewed}{doc.contractText ? " · 📋" : ""}{doc.url && <> · <a href={doc.url} target="_blank" rel="noopener noreferrer" style={{ color: C.accent, textDecoration: "none" }}>{t.viewDoc}↗</a></>}</div></div><div style={{ display: "flex", gap: 6 }}><button onClick={() => setShowAssign(doc.id)} style={{ padding: "5px 12px", borderRadius: 6, border: `1px solid ${C.border}`, background: "transparent", color: C.accent, fontWeight: 600, fontSize: 11, cursor: "pointer" }}>{t.assignDocs}</button><button onClick={() => { if (window.confirm(`${t.remove} "${doc.name}"?`)) remD(doc.id); }} style={{ background: C.redSoft, border: "none", color: C.red, padding: "5px 12px", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>{t.remove}</button></div></div><div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 6 }}>{aEmps.map(emp => { const chk = emp.docChecks[doc.id]; const st = chk?.status; const isSigned = st === "signed"; const isOpened = st === "opened"; const chipBg = isSigned ? C.greenSoft : (isOpened ? C.amberSoft : (chk ? C.greenSoft : C.redSoft)); const chipColor = isSigned ? C.green : (isOpened ? C.amber : (chk ? C.green : C.red)); const chipIcon = isSigned ? "✓" : (isOpened ? "◎" : (chk ? "✓" : "✗")); return (<div key={emp.id} style={{ padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 600, background: chipBg, color: chipColor }}>{emp.name.split(" ")[0]} {chipIcon}</div>); })}</div></div>); })}</div></div>); })}
-          {showAssign && (() => { const doc = docs.find(d => d.id === showAssign); if (!doc) return null; const isAll = doc.assignedTo?.includes("all"); return (<Modal onClose={() => setShowAssign(null)}><h3 style={{ fontSize: 17, fontWeight: 700, marginBottom: 6 }}>{t.assignDocs}</h3><div style={{ color: C.textMuted, fontSize: 13, marginBottom: 18 }}>{doc.name}</div><div style={{ marginBottom: 12 }}><label onClick={() => toggleAssign(doc.id, "all")} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: 8, background: isAll ? C.accentSoft : C.surfaceAlt, border: `1px solid ${isAll ? C.accent : C.border}`, cursor: "pointer", marginBottom: 8 }}><div style={{ width: 20, height: 20, borderRadius: 5, border: `2px solid ${isAll ? C.accent : C.textDim}`, background: isAll ? C.accent : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{isAll && <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6L5 8.5L9.5 3.5" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>}</div><span style={{ fontWeight: 600, fontSize: 13, color: isAll ? C.accent : C.text }}>{t.allEmployees}</span></label>{!isAll && activeEmps.map(emp => { const assigned = doc.assignedTo?.includes(emp.id); return (<label key={emp.id} onClick={() => toggleAssign(doc.id, emp.id)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderRadius: 8, background: assigned ? C.greenSoft : C.surfaceAlt, border: `1px solid ${assigned ? "rgba(34,197,94,0.18)" : C.border}`, cursor: "pointer", marginBottom: 5 }}><div style={{ width: 20, height: 20, borderRadius: 5, border: `2px solid ${assigned ? C.green : C.textDim}`, background: assigned ? C.green : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{assigned && <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6L5 8.5L9.5 3.5" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>}</div><div><div style={{ fontWeight: 600, fontSize: 13 }}>{emp.name}</div><div style={{ fontSize: 11, color: C.textMuted }}>{roleLabel(emp.role)}</div></div></label>); })}</div><div style={{ textAlign: "right" }}><button onClick={() => setShowAssign(null)} style={{ padding: "9px 18px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{t.close}</button></div></Modal>); })()}
+          {showAssign && (() => { const doc = docs.find(d => d.id === showAssign); if (!doc) return null; const isAll = doc.assignedTo?.includes("all"); return (<Modal onClose={() => setShowAssign(null)}><h3 style={{ fontSize: 17, fontWeight: 700, marginBottom: 6 }}>{t.assignDocs}</h3><div style={{ color: C.textMuted, fontSize: 13, marginBottom: 18 }}>{doc.name}</div><div style={{ marginBottom: 12 }}><label onClick={() => toggleAssign(doc.id, "all")} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: 8, background: isAll ? C.accentSoft : C.surfaceAlt, border: `1px solid ${isAll ? C.accent : C.border}`, cursor: "pointer", marginBottom: 8 }}><div style={{ width: 20, height: 20, borderRadius: 5, border: `2px solid ${isAll ? C.accent : C.textDim}`, background: isAll ? C.accent : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{isAll && <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6L5 8.5L9.5 3.5" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>}</div><span style={{ fontWeight: 600, fontSize: 13, color: isAll ? C.accent : C.text }}>{t.allEmployees}</span></label>{!isAll && activeEmps.map(emp => { const assigned = doc.assignedTo?.includes(emp.id); return (<label key={emp.id} onClick={() => toggleAssign(doc.id, emp.id)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderRadius: 8, background: assigned ? C.greenSoft : C.surfaceAlt, border: `1px solid ${assigned ? "rgba(34,197,94,0.18)" : C.border}`, cursor: "pointer", marginBottom: 5 }}><div style={{ width: 20, height: 20, borderRadius: 5, border: `2px solid ${assigned ? C.green : C.textDim}`, background: assigned ? C.green : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{assigned && <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6L5 8.5L9.5 3.5" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>}</div><div><div style={{ fontWeight: 600, fontSize: 13 }}>{emp.name}</div><div style={{ fontSize: 11, color: C.textMuted }}>{emp.role}</div></div></label>); })}</div><div style={{ textAlign: "right" }}><button onClick={() => setShowAssign(null)} style={{ padding: "9px 18px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{t.close}</button></div></Modal>); })()}
           {showAD && <Modal onClose={() => setShowAD(false)} wide={nDT === "contract"}><h3 style={{ fontSize: 17, fontWeight: 700, marginBottom: 18 }}>{t.addDocument}</h3>
             <div style={{ marginBottom: 12 }}><label style={lbl}>{t.docName}</label><input value={nDN} onChange={e => sNDN(e.target.value)} placeholder="e.g. Employment Contract" style={inp} /></div>
             <div style={{ marginBottom: 12 }}><label style={lbl}>{t.type}</label><div style={{ display: "flex", gap: 8 }}>{["sop", "contract"].map(ty => (<button key={ty} onClick={() => sNDT(ty)} style={{ flex: 1, padding: "9px", borderRadius: 8, border: `1px solid ${nDT === ty ? C.accent : C.border}`, background: nDT === ty ? C.accentSoft : "transparent", color: nDT === ty ? C.accent : C.textMuted, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{ty === "sop" ? t.sop : t.contract}</button>))}</div></div>
@@ -1199,7 +1259,7 @@ export default function App() {
                     const prog = getEmpObProgress(emp.id);
                     return (
                       <tr key={emp.id} style={{ borderBottom: `1px solid ${C.border}` }}>
-                        <td style={{ padding: "10px 14px", fontWeight: 600, fontSize: 13 }}>{emp.name}<div style={{ fontSize: 11, color: C.textMuted }}>{roleLabel(emp.role)}</div></td>
+                        <td style={{ padding: "10px 14px", fontWeight: 600, fontSize: 13 }}>{emp.name}<div style={{ fontSize: 11, color: C.textMuted }}>{emp.role}</div></td>
                         {obDocs.map(d => {
                           const sub = obSubs.find(s => s.employee_id === emp.id && s.document_id === d.id);
                           const st = sub?.status;
@@ -1230,7 +1290,7 @@ export default function App() {
           const showPick = sel.trackPickRate !== false;
           return (<div>
             <button onClick={() => setView("employees")} style={{ background: "transparent", border: "none", color: C.accent, cursor: "pointer", fontSize: 13, fontWeight: 600, marginBottom: 18, padding: 0 }}>{t.backToEmployees}</button>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20, flexWrap: "wrap", gap: 12 }}><div><h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 2 }}>{sel.name}{sel.archived ? " (Archived)" : ""}{sel.employmentType !== "permanent" ? <span style={{ marginLeft: 8, padding: "2px 8px", borderRadius: 5, fontSize: 12, fontWeight: 600, background: sel.employmentType === "seasonal" ? C.amberSoft : C.accentSoft, color: sel.employmentType === "seasonal" ? C.amber : C.accent }}>{sel.employmentType}</span> : ""}</h2><div style={{ color: C.textMuted, fontSize: 13 }}>{roleLabel(sel.role)}{sel.username ? ` · @${sel.username}` : ""} · {t.startDate}: {sel.startDate || "—"}{sel.endDate ? ` · End: ${sel.endDate}` : ""}</div></div><div style={{ display: "flex", gap: 8 }}>{isManager && <button onClick={() => openEditEmp(sel)} style={{ padding: "7px 14px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.accentSoft, color: C.accent, fontWeight: 600, fontSize: 11, cursor: "pointer" }}>Edit</button>}{isManager && <button onClick={async () => { await saveEmp({ ...sel, archived: !sel.archived }); }} style={{ padding: "7px 14px", borderRadius: 7, border: `1px solid ${C.border}`, background: sel.archived ? C.greenSoft : C.amberSoft, color: sel.archived ? C.green : C.amber, fontWeight: 600, fontSize: 11, cursor: "pointer" }}>{sel.archived ? "Restore" : "Archive"}</button>}{isManager && <button onClick={async () => { await saveEmp({ ...sel, trackPickRate: !showPick }); }} style={{ padding: "7px 14px", borderRadius: 7, border: `1px solid ${C.border}`, background: showPick ? C.accentSoft : "transparent", color: showPick ? C.accent : C.textDim, fontWeight: 600, fontSize: 11, cursor: "pointer" }}>{showPick ? "✓ " : ""}{t.pickRate}</button>}{isManager && <button onClick={() => { if (window.confirm(`${t.remove} ${sel.name}?`)) remE(sel.id); }} style={{ background: C.redSoft, border: "none", color: C.red, padding: "7px 16px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{t.removeEmployee}</button>}</div></div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20, flexWrap: "wrap", gap: 12 }}><div><h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 2 }}>{sel.name}{sel.archived ? " (Archived)" : ""}{sel.employmentType !== "permanent" ? <span style={{ marginLeft: 8, padding: "2px 8px", borderRadius: 5, fontSize: 12, fontWeight: 600, background: sel.employmentType === "seasonal" ? C.amberSoft : C.accentSoft, color: sel.employmentType === "seasonal" ? C.amber : C.accent }}>{sel.employmentType}</span> : ""}</h2><div style={{ color: C.textMuted, fontSize: 13 }}>{sel.role}{sel.username ? ` · @${sel.username}` : ""} · {t.startDate}: {sel.startDate || "—"}{sel.endDate ? ` · End: ${sel.endDate}` : ""}</div></div><div style={{ display: "flex", gap: 8 }}>{isManager && <button onClick={() => openEditEmp(sel)} style={{ padding: "7px 14px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.accentSoft, color: C.accent, fontWeight: 600, fontSize: 11, cursor: "pointer" }}>Edit</button>}{isManager && <button onClick={async () => { await saveEmp({ ...sel, archived: !sel.archived }); }} style={{ padding: "7px 14px", borderRadius: 7, border: `1px solid ${C.border}`, background: sel.archived ? C.greenSoft : C.amberSoft, color: sel.archived ? C.green : C.amber, fontWeight: 600, fontSize: 11, cursor: "pointer" }}>{sel.archived ? "Restore" : "Archive"}</button>}{isManager && <button onClick={async () => { await saveEmp({ ...sel, trackPickRate: !showPick }); }} style={{ padding: "7px 14px", borderRadius: 7, border: `1px solid ${C.border}`, background: showPick ? C.accentSoft : "transparent", color: showPick ? C.accent : C.textDim, fontWeight: 600, fontSize: 11, cursor: "pointer" }}>{showPick ? "✓ " : ""}{t.pickRate}</button>}{isManager && <button onClick={() => { if (window.confirm(`${t.remove} ${sel.name}?`)) remE(sel.id); }} style={{ background: C.redSoft, border: "none", color: C.red, padding: "7px 16px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{t.removeEmployee}</button>}</div></div>
             <div style={{ display: "grid", gridTemplateColumns: showPick ? "1fr 1fr" : "1fr", gap: 18 }}>
               {showPick && <div style={card}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}><div><div style={{ fontWeight: 700, fontSize: 15 }}>{t.pickRateHistory}</div><div style={{ color: C.textMuted, fontSize: 12, marginTop: 2 }}>{t.weeklyTracking}</div></div><button onClick={() => setShowAP(true)} style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: C.accent, color: "#fff", fontWeight: 600, fontSize: 12, cursor: "pointer" }}>{t.addWeek}</button></div><div style={{ overflowX: "auto", marginBottom: 8 }}><PickChart history={sel.pickHistory} width={420} height={160} t={t} /></div>{sel.pickHistory.length > 0 && <div style={{ maxHeight: 140, overflowY: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr style={{ borderBottom: `1px solid ${C.border}` }}><th style={{ fontSize: 11, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, fontWeight: 600, padding: "6px 8px", textAlign: "left", whiteSpace: "nowrap" }}>{t.wk}</th><th style={{ fontSize: 11, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, fontWeight: 600, padding: "6px 8px", textAlign: "left", whiteSpace: "nowrap" }}>{t.week}</th><th style={{ fontSize: 11, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, fontWeight: 600, padding: "6px 8px", textAlign: "right", whiteSpace: "nowrap" }}>{t.rate}</th><th style={{ fontSize: 11, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, fontWeight: 600, padding: "6px 8px", textAlign: "right", whiteSpace: "nowrap" }}>{t.target}</th><th style={{ width: 28 }}></th></tr></thead><tbody>{[...sel.pickHistory].reverse().map((p, i) => { const tgt = getTarget(p.wk); const met = p.rate >= tgt; return (<tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}><td style={{ padding: "6px 8px", fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: C.textMuted }}>{p.wk}</td><td style={{ padding: "6px 8px", fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: C.textDim }}>{p.date}</td><td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", color: met ? C.green : C.red }}>{typeof p.rate === "number" ? p.rate.toFixed(1) : p.rate}</td><td style={{ padding: "6px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: C.targetYellow }}>{typeof tgt === "number" ? tgt.toFixed(1) : tgt}</td><td style={{ padding: "6px 4px", textAlign: "right" }}><button onClick={async () => { const newHist = sel.pickHistory.filter((_, j) => j !== sel.pickHistory.length - 1 - i); await saveEmp({ ...sel, pickHistory: newHist }); }} style={{ background: "transparent", border: "none", color: C.textDim, cursor: "pointer", fontSize: 11 }}>✕</button></td></tr>); })}</tbody></table></div>}</div>}
               <div style={card}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}><div><div style={{ fontWeight: 700, fontSize: 15 }}>{t.docProgress}</div><div style={{ color: C.textMuted, fontSize: 12, marginTop: 2 }}>{t.assignedDocs}</div></div><div style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center" }}><Ring percent={dp} size={50} stroke={5} color={dp === 100 ? C.green : dp >= 50 ? C.amber : C.red} /><span style={{ position: "absolute", fontSize: 11, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>{dp}%</span></div></div>{ad.length === 0 && <div style={{ color: C.textDim }}>{t.noDocsAssigned}</div>}<div style={{ display: "flex", flexDirection: "column", gap: 5, maxHeight: 300, overflowY: "auto" }}>{["sop", "contract"].map(type => { const td = ad.filter(d => d.type === type); if (!td.length) return null; return (<div key={type}><div style={{ fontSize: 10, color: C.textDim, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.8, margin: "8px 0 6px" }}>{type === "sop" ? t.sopsDocs : t.contractsDocs}</div>{td.map(doc => <EmpDocItem key={doc.id} doc={doc} emp={sel} isMgr={true} />)}</div>); })}</div></div>
@@ -1244,7 +1304,7 @@ export default function App() {
               <h3 style={{ fontSize: 17, fontWeight: 700, marginBottom: 18 }}>Edit Employee</h3>
               <div style={{ marginBottom: 12 }}><label style={lbl}>{t.fullName}</label><input value={editName} onChange={e => setEditName(e.target.value)} style={inp} /></div>
               <div style={{ marginBottom: 12 }}><label style={lbl}>Username</label><input value={editUsername} onChange={e => setEditUsername(e.target.value)} style={inp} /></div>
-              <div style={{ marginBottom: 12 }}><label style={lbl}>{t.role}</label><select value={editRole} onChange={e => setEditRole(e.target.value)} style={inp}>{ROLES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}</select></div>
+              <div style={{ marginBottom: 12 }}><label style={lbl}>{t.role}</label><input value={editRole} onChange={e => setEditRole(e.target.value)} placeholder="e.g. Picker" style={inp} /></div>
               <div style={{ marginBottom: 12 }}><label style={lbl}>{t.pinForSignIn}</label><input value={editPin} onChange={e => setEditPin(e.target.value.replace(/\D/g, ""))} style={inp} /></div>
               <div style={{ marginBottom: 12 }}><label style={lbl}>Phone (WhatsApp)</label><input value={editPhone} onChange={e => setEditPhone(e.target.value)} placeholder="+447700900123" style={inp} /></div>
               <div style={{ marginBottom: 12 }}><label style={lbl}>Account Type</label><div style={{ display: "flex", gap: 8 }}>{["employee", "supervisor", "manager"].map(r => (<button key={r} onClick={() => setEditAccType(r)} style={{ flex: 1, padding: "9px", borderRadius: 8, border: `1px solid ${editAccType === r ? C.accent : C.border}`, background: editAccType === r ? C.accentSoft : "transparent", color: editAccType === r ? C.accent : C.textMuted, fontWeight: 600, fontSize: 12, cursor: "pointer", textTransform: "capitalize" }}>{r}</button>))}</div></div>
