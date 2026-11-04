@@ -1,3 +1,11 @@
+// ============================================================================
+// ⚠️  STOP — before pasting a full copy of this file:
+// Make sure you started from the CURRENT version on main (GitHub → Raw),
+// NOT an old local copy. Three overwrites from stale copies (Jul/Aug/Nov 2026)
+// deleted the Assistant tab and Audits module. A GitHub check ("App guard")
+// now blocks changes that drop protected features or break the build.
+// Easiest safe route: ask Claude to make the change for you.
+// ============================================================================
 import React, { useState, useEffect, useCallback, useRef } from "react";
 // xlsx is only needed for the export buttons; it is loaded on demand inside the
 // export functions (dynamic import) to keep it out of the initial bundle.
