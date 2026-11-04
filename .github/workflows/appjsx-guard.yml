@@ -1,0 +1,63 @@
+name: App guard
+
+# Protects src/App.jsx against accidental overwrites from stale copies.
+# Three times (Jul, Aug, Nov 2026) a full-file paste of App.jsx silently
+# deleted the Assistant tab and the Audits module. This check fails any
+# change where the app no longer builds or a protected feature disappears.
+#
+# If you INTENTIONALLY remove a feature, delete its line from the
+# "Check protected features" step below in the same commit.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  appjsx-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Build
+        run: npm run build
+      - name: Check protected features are still present
+        run: |
+          fail=0
+          check() { grep -qF "$1" src/App.jsx || { echo "MISSING from src/App.jsx: $1"; fail=1; }; }
+          check 'AssistantView'
+          check 'view === "assistant"'
+          check 'useAudits'
+          check 'UNIFIED_FRAMEWORK'
+          check 'view === "audits"'
+          check 'employmentType'
+          check 'roleLabel'
+          check 'onAuthChange'
+          if [ "$fail" -ne 0 ]; then
+            echo ""
+            echo "::error::src/App.jsx is missing protected features — this usually means it was pasted from a STALE copy. Start from the current file on main (GitHub → src/App.jsx → Raw) or ask Claude to make the change. If the removal is intentional, also remove the feature's line from .github/workflows/appjsx-guard.yml."
+            exit 1
+          fi
+          echo "All protected features present."
+      - name: Open an issue if a push to main broke the guard
+        if: failure() && github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "⚠️ App.jsx guard failed on main (${GITHUB_SHA:0:7})" \
+            --body "Commit \`${GITHUB_SHA}\` on \`main\` failed the App.jsx guard: the build broke or protected features (Assistant tab, Audits module, …) are missing — usually from pasting a stale copy of App.jsx.
+
+          The broken version may already be deployed. Failed run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+
+          To fix: ask Claude to restore the missing features (it will merge your new changes with the restored code), or revert this commit."
