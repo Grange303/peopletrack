@@ -17,6 +17,7 @@ function useEmployees() {
   const [loaded, setLoaded] = useState(false);
 
   const fetchEmps = useCallback(async () => {
+    try {
     const { data } = await supabase.from("employees").select("*");
     if (data) setEmps(data.map(e => ({
       id: e.id, name: e.name, role: e.role, pin: e.pin, username: e.username || "",
@@ -30,7 +31,8 @@ function useEmployees() {
       pickStartWeek: e.pick_start_week || 1,
       archived: e.archived || false
     })).sort((a, b) => a.name.localeCompare(b.name)));
-    setLoaded(true);
+    } catch (e) { console.error("PeopleTrack: failed to load employees", e); }
+    finally { setLoaded(true); }
   }, []);
 
   useEffect(() => { fetchEmps(); }, [fetchEmps]);
@@ -81,13 +83,15 @@ function useDocs() {
   const [loaded, setLoaded] = useState(false);
 
   const fetchDocs = useCallback(async () => {
+    try {
     const { data } = await supabase.from("documents").select("*");
     if (data) setDocs(data.map(d => ({
       id: d.id, name: d.name, type: d.type, url: d.url || "",
       assignedTo: d.assigned_to || ["all"], contractText: d.contract_text || "",
       reviewMonths: d.review_months || 12
     })));
-    setLoaded(true);
+    } catch (e) { console.error("PeopleTrack: failed to load documents", e); }
+    finally { setLoaded(true); }
   }, []);
 
   useEffect(() => { fetchDocs(); }, [fetchDocs]);
@@ -127,9 +131,11 @@ function useSettings() {
   const [loaded, setLoaded] = useState(false);
   useEffect(() => {
     (async () => {
-      const { data } = await supabase.from("settings").select("*").eq("key", "managerPin").single();
+      try {
+    const { data } = await supabase.from("settings").select("*").eq("key", "managerPin").single();
       if (data) setManagerPin(data.value);
-      setLoaded(true);
+      } catch (e) { console.error("PeopleTrack: failed to load settings", e); }
+    finally { setLoaded(true); }
     })();
   }, []);
   return { managerPin, loaded };
@@ -149,9 +155,11 @@ function useOnboardingDocs() {
   const [obDocs, setObDocs] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const fetch_ = useCallback(async () => {
+    try {
     const { data } = await supabase.from("onboarding_documents").select("*").eq("active", true).order("sort_order");
     if (data) setObDocs(data);
-    setLoaded(true);
+    } catch (e) { console.error("PeopleTrack: failed to load onboarding documents", e); }
+    finally { setLoaded(true); }
   }, []);
   useEffect(() => { fetch_(); }, [fetch_]);
   return { obDocs, loaded, refresh: fetch_ };
@@ -164,9 +172,11 @@ function useOnboardingSubs() {
     // Deliberately exclude signature_png / manager_signature_png: they are large
     // base64 images (~2 MB across the table) and this list is refetched every 30s.
     // Signatures are fetched per-submission via fetchSubSignatures() when viewed.
+    try {
     const { data } = await supabase.from("onboarding_submissions").select("id, employee_id, document_id, submitted_at, reviewed_at, reviewed_by, answers, status, flag_reasons, manager_notes, created_at, updated_at");
     if (data) setSubs(data);
-    setLoaded(true);
+    } catch (e) { console.error("PeopleTrack: failed to load onboarding submissions", e); }
+    finally { setLoaded(true); }
   }, []);
   useEffect(() => { fetch_(); }, [fetch_]);
   const saveSub = useCallback(async (sub) => {
@@ -187,13 +197,15 @@ function useAudits() {
   const [audits, setAudits] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const fetch_ = useCallback(async () => {
+    try {
     const { data } = await supabase.from("audits").select("*");
     if (data) setAudits(data.map(a => ({
       id: a.id, scheme: a.scheme, title: a.title,
       auditDate: a.audit_date || "", status: a.status || "planning",
       items: a.items || [], createdAt: a.created_at
     })).sort((x, y) => (y.createdAt || "").localeCompare(x.createdAt || "")));
-    setLoaded(true);
+    } catch (e) { console.error("PeopleTrack: failed to load audits", e); }
+    finally { setLoaded(true); }
   }, []);
   useEffect(() => { fetch_(); }, [fetch_]);
   const saveAudit = useCallback(async (a) => {
@@ -1203,7 +1215,10 @@ export default function App() {
       refreshEmps(); refreshDocs(); refreshObSubs();
     };
     getUser().then(u => { if (alive && u) applySession(u); });
-    const unsub = onAuthChange(u => applySession(u));
+    // supabase-js holds an internal auth lock while this callback runs; querying
+    // the database inside it deadlocks every other request and leaves the app
+    // stuck on "Loading...". Defer to a macrotask so the lock is released first.
+    const unsub = onAuthChange(u => { setTimeout(() => { if (alive) applySession(u); }, 0); });
     return () => { alive = false; unsub && unsub(); };
   }, [refreshEmps, refreshDocs, refreshObSubs]);
 
@@ -1497,7 +1512,10 @@ export default function App() {
     );
   };
 
-  if (!loaded) return <div style={{ minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", color: C.textMuted, fontFamily: "'DM Sans', sans-serif" }}>{t.loading || "Loading..."}</div>;
+  if (!loaded) return (<div style={{ minHeight: "100vh", background: C.bg, display: "flex", flexDirection: "column", gap: 18, alignItems: "center", justifyContent: "center", color: C.textMuted, fontFamily: "'DM Sans', sans-serif" }}>
+    <div>{t.loading || "Loading..."}</div>
+    <button onClick={() => window.location.reload()} style={{ padding: "8px 16px", borderRadius: 8, border: `1px solid ${C.border}`, background: "transparent", color: C.textDim, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>Taking too long? Tap to reload</button>
+  </div>);
 
   // ═══════ LOGIN ═══════
   if (!auth) return (
